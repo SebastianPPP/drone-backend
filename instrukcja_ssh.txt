@@ -1,0 +1,61 @@
+=== PORADNIK: ŁĄCZENIE SIĘ Z RASPBERRY PI PRZEZ SSH ===
+
+Dane dostępowe:
+IP Raspberry Pi: 192.168.1.110
+Nazwa użytkownika: skimmer
+Hasło: skimmer
+
+------------------------------------------------------
+1. Łączenie przez terminal (Linux, MacOS lub Windows z WSL / PowerShell)
+
+- Otwórz terminal.
+- Wpisz polecenie:
+  ssh skimmer@192.168.1.110
+- Po pojawieniu się prośby, wpisz hasło: skimmer
+  (Podczas wpisywania hasła znaki się nie pojawią - to normalne)
+- Po zalogowaniu możesz wykonywać komendy na Raspberry Pi.
+
+Przykłady:
+- Przejdź do folderu z projektem:
+  cd /home/skimmer/drone
+- Uruchom skrypt telemetry.py:
+  python3 telemetry.py
+- Sprawdź status usługi telemetry:
+  sudo systemctl status telemetry.service
+
+------------------------------------------------------
+2. Łączenie przez PuTTY (Windows bez WSL)
+
+- Pobierz i zainstaluj PuTTY: https://www.putty.org/
+- Uruchom PuTTY.
+- W polu "Host Name (or IP address)" wpisz:
+  192.168.1.110
+- Kliknij "Open".
+- Po pojawieniu się okna terminala wpisz login:
+  skimmer
+- Następnie wpisz hasło:
+  skimmer
+- Po zalogowaniu możesz wykonywać polecenia tak jak w punkcie 1.
+
+------------------------------------------------------
+3. Przydatne komendy:
+
+- Uruchom skrypt telemetry.py:
+  python3 /home/skimmer/drone/telemetry.py
+
+- Sprawdź status usługi telemetry:
+  sudo systemctl status telemetry.service
+
+- Podejrzyj logi usługi telemetry (na żywo):
+  journalctl -u telemetry.service -f
+
+------------------------------------------------------
+4. Inne informacje:
+
+- Hasło nie będzie widoczne podczas wpisywania.
+- Upewnij się, że Raspberry Pi i komputer są w tej samej sieci lokalnej.
+- W razie problemów z połączeniem sprawdź, czy Raspberry Pi jest włączone i ma poprawny adres IP.
+
+------------------------------------------------------
+
+KONIEC PORADNIKA
