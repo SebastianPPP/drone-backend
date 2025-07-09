@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import sqlite3
 import time
+import os
 
 app = Flask(__name__)
 DB_NAME = 'telemetry.db'
@@ -60,5 +61,6 @@ def get_latest_for_drone(drone_id):
             return jsonify({"error": "Brak danych dla tego drona"}), 404
 
 if __name__ == "__main__":
-    init_db()
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
