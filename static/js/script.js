@@ -1,162 +1,167 @@
 /* ---------- ikony ---------- */
-function makeIcon(url){
-  return new L.Icon({
-    iconUrl: url,
-    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-    iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
-  });
-}
-const ICON = {
-  active:     makeIcon("/static/images/active.png"),     // zielony
-  inactive:   makeIcon("/static/images/non_active.png"), // czerwony
-  detected:   makeIcon("/static/images/drone.png"),      // szary
-  selected:   makeIcon("/static/images/marked.png"),     // niebieski
-};
+const iconActive   = new L.Icon({
+  iconUrl: "/static/images/active.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+});
+const iconInactive = new L.Icon({
+  iconUrl: "/static/images/non_active.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+});
+const iconDetected = new L.Icon({
+  iconUrl: "/static/images/drone.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+});
+const iconSelected = new L.Icon({
+  iconUrl: "/static/images/marked.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+});
 
 /* ---------- konfiguracja ---------- */
-const API = "/api/telemetry/latest";
-const ACTIVE_MS   = 5000;   // < 5 s  → aktywny
-const DETECT_MS   = 10000;  // >10 s  → znika z „Wykrytych”
+const apiAll  = "/api/telemetry/latest";
+const apiList = "/api/drones";
+const OFFLINE_MS = 5000;
+const DETECTED_TIMEOUT_MS = 10000;
 
-/* ---------- stan ---------- */
-let accepted = new Set();     // drony zaakceptowane (pozostają na liście na zawsze)
-let selected = null;          // kliknięty dron
-let lastSeen = {};            // ID → czas w ms (Epoch)
-let markers  = {};            // ID → L.marker
+/* ---------- stan aplikacji ---------- */
+let acceptedSet = new Set();
+let selectedId  = null;
+let markers     = {};
+let lastSeenMap = {};
 let map;
 
 /* ---------- mapa ---------- */
-function initMap(){
-  map = L.map("map").setView([52.1,19.3],6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              {attribution:"© OpenStreetMap"}).addTo(map);
+function initMap() {
+  map = L.map("map").setView([52.1, 19.3], 6);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution:"© OpenStreetMap",
+  }).addTo(map);
 }
 
-/* ---------- status drona ---------- */
-function statusOf(id){
-  const t = lastSeen[id];
-  if(!t) return accepted.has(id)? "inactive" : "gone";   // brak danych
-
-  const age = Date.now() - t;
-
-  if(accepted.has(id)){
-    return age <= ACTIVE_MS ? "active" : "inactive";   // nigdy "gone"
-  }else{
-    if(age > DETECT_MS)      return "gone";
-    return "detected";                                // w ciągu 10 s
+function statusOf(id) {
+  const ts = lastSeenMap[id];
+  if (!ts) return "gone";
+  const age = Date.now() - new Date(ts).getTime();
+  if (!acceptedSet.has(id)) {
+    if (age > DETECTED_TIMEOUT_MS) return "gone";
+    return "detected";
   }
+  if (age <= OFFLINE_MS) return "active";
+  return "inactive";
 }
 
-/* ---------- rysowanie list ---------- */
-function renderLists(ids){
-  const aDiv=document.getElementById("active-list");
-  const iDiv=document.getElementById("inactive-list");
-  const dDiv=document.getElementById("detected-list");
+/* ---------- render list ---------- */
+function renderLists(allIds) {
+  const elActive   = document.getElementById("active-list");
+  const elInactive = document.getElementById("inactive-list");
+  const elDetected = document.getElementById("detected-list");
 
-  aDiv.innerHTML=iDiv.innerHTML=dDiv.innerHTML="";
-
-  let cntA=0,cntI=0,cntD=0;
-
-  ids.sort().forEach(id=>{
-    const st=statusOf(id);
-    if(st==="gone") return;
-
-    let parent,cls,btnTxt,btnAct;
-
-    if(accepted.has(id)){
-      if(st==="active"){ parent=aDiv; cls="active"; cntA++; }
-      else              { parent=iDiv; cls="inactive"; cntI++; }
-
-      btnTxt="Usuń";
-      btnAct=()=>{ accepted.delete(id); if(selected===id)selected=null; refresh(); };
-    }else{                                   // wykryty
-      parent=dDiv; cls="detected"; cntD++;
-      btnTxt="Akceptuj";
-      btnAct=()=>{ accepted.add(id); if(!selected)selected=id; refresh(); };
+  const makeItem = (id, cls, onClick, btnIcon, btnTitle, btnHandler) => {
+    const div = document.createElement("div");
+    div.className = `item ${cls}` + (id === selectedId ? " selected" : "");
+    div.textContent = id;
+    div.onclick = onClick;
+    if (btnIcon) {
+      const btn = document.createElement("button");
+      btn.className = "btn-action";
+      btn.title = btnTitle;
+      btn.innerHTML = btnIcon;
+      btn.onclick = (e)=>{ e.stopPropagation(); btnHandler(); };
+      div.appendChild(btn);
     }
+    return div;
+  };
 
-    const row=document.createElement("div");
-    row.className=`item ${cls}${id===selected?" selected":""}`;
-    row.textContent=id;
-
-    const btn=document.createElement("button");
-    btn.textContent=btnTxt;
-    btn.onclick=e=>{e.stopPropagation(); btnAct();};
-    row.appendChild(btn);
-
-    row.onclick=()=>{selected=id; refresh();};
-
-    parent.appendChild(row);
+  const activeIds = [...acceptedSet].filter(id => statusOf(id) === "active");
+  elActive.innerHTML = activeIds.length ? "" : "<em>Brak</em>";
+  activeIds.forEach(id => {
+    elActive.appendChild(
+      makeItem(
+        id,"active",
+        ()=>{ selectedId=id; refreshOnce(); },
+        "✖","Usuń",
+        ()=>{ acceptedSet.delete(id); refreshOnce(); }
+      )
+    );
   });
 
-  if(!cntA) aDiv.innerHTML="<em>Brak</em>";
-  if(!cntI) iDiv.innerHTML="<em>Brak</em>";
-  if(!cntD) dDiv.innerHTML="<em>Brak</em>";
+  const inactiveIds = [...acceptedSet].filter(id => statusOf(id) === "inactive");
+  elInactive.innerHTML = inactiveIds.length ? "" : "<em>Brak</em>";
+  inactiveIds.forEach(id => {
+    elInactive.appendChild(
+      makeItem(
+        id,"inactive",
+        ()=>{ selectedId=id; refreshOnce(); },
+        "✖","Usuń",
+        ()=>{ acceptedSet.delete(id); refreshOnce(); }
+      )
+    );
+  });
+
+  const detected = allIds.filter(id => !acceptedSet.has(id) && statusOf(id) === "detected");
+  elDetected.innerHTML = detected.length ? "" : "<em>Brak</em>";
+  detected.forEach(id => {
+    elDetected.appendChild(
+      makeItem(
+        id,"detected",
+        ()=>{ selectedId=id; refreshOnce(); },
+        "✓","Akceptuj",
+        ()=>{ acceptedSet.add(id); if (!selectedId) selectedId=id; refreshOnce(); }
+      )
+    );
+  });
 }
 
 /* ---------- markery ---------- */
-function updateMarkers(data){
-  // aktualizuj lastSeen
-  data.forEach(d=>{
-    lastSeen[d.drone_id]=Date.parse(d.timestamp.split(".")[0]+"Z");
-  });
+function updateMarkers(data) {
+  data.forEach(d => { lastSeenMap[d.drone_id] = d.timestamp; });
 
-  const seenNow = new Set();
+  data.forEach(rec => {
+    const id   = rec.drone_id;
+    const pos  = [rec.lat, rec.lon];
+    const st   = statusOf(id);
 
-  // aktualizuj / twórz markery z nowych rekordów
-  data.forEach(d=>{
-    const id=d.drone_id, pos=[d.lat,d.lon];
-    const st=statusOf(id);
-    if(st==="gone") return;
-    seenNow.add(id);
+    let icon;
+    if (id === selectedId)        icon = iconSelected;
+    else if (st === "active")     icon = iconActive;
+    else if (st === "inactive")   icon = iconInactive;
+    else if (st === "detected")   icon = iconDetected;
 
-    let icon = (id===selected) ? ICON.selected :
-               (!accepted.has(id)) ? ICON.detected :
-               (st==="active") ? ICON.active : ICON.inactive;
-
-    if(!markers[id]){
-      markers[id]=L.marker(pos,{icon}).addTo(map).bindPopup(id)
-                   .on("click",()=>{selected=id; refresh();});
-    }else{
+    if (!markers[id]) {
+      markers[id] = L.marker(pos,{icon}).addTo(map).bindPopup(id);
+      markers[id].on("click", ()=>{ selectedId=id; refreshOnce(); });
+    } else {
       markers[id].setLatLng(pos).setIcon(icon);
     }
   });
 
-  // zaktualizuj ikony dronów zaakceptowanych, które dziś NIE przysłały pakietu
-  accepted.forEach(id=>{
-    if(seenNow.has(id)) return;
-    const st=statusOf(id);                    // na pewno inactive
-    let icon=(id===selected)?ICON.selected:ICON.inactive;
-
-    if(!markers[id]) return;                  // może zniknął, ale accepted → nic
-    markers[id].setIcon(icon);
-  });
-
-  // usuń marker tylko dla niewykrytych i niezaakceptowanych „gone”
-  Object.keys(markers).forEach(id=>{
-    if(statusOf(id)==="gone" && !accepted.has(id)){
+  Object.keys(markers).forEach(id => {
+    if (!acceptedSet.has(id) && statusOf(id) === "gone") {
       map.removeLayer(markers[id]);
       delete markers[id];
-      delete lastSeen[id];
+      delete lastSeenMap[id];
     }
   });
 }
 
-/* ---------- główny fetch ---------- */
-async function refresh(){
-  try{
-    const res=await fetch(API);
-    const data=await res.json();
-
-    const ids=[...new Set(data.map(d=>d.drone_id)), ...accepted]; // dodaj zaakceptowane, gdyby nic nie wysłały
+/* ---------- zapytania ---------- */
+function refreshOnce(){
+  Promise.all([
+    fetch(apiList).then(r => r.json()),
+    fetch(apiAll).then(r => r.json())
+  ])
+  .then(([ids, data]) => {
+    const allIds = [...new Set([...ids, ...acceptedSet])];
     updateMarkers(data);
-    renderLists(ids);
-  }catch(e){console.error(e);}
+    renderLists(allIds);
+  })
+  .catch(console.error);
 }
 
-/* ---------- start ---------- */
-document.addEventListener("DOMContentLoaded",()=>{
-  initMap();
-  refresh();
-  setInterval(refresh,3000);
-});
+/* ---------- start + pętla ---------- */
+initMap();
+refreshOnce();
+setInterval(refreshOnce, 3000);
