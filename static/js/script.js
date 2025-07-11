@@ -1,5 +1,5 @@
 /* ---------- ikony ---------- */
-function makeIcon(url) {
+function makeIcon(url){
   return new L.Icon({
     iconUrl: url,
     shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
@@ -7,122 +7,137 @@ function makeIcon(url) {
   });
 }
 const ICON = {
-  active:     makeIcon("/static/images/active.png"),   // zielony
+  active:     makeIcon("/static/images/active.png"),     // zielony
   inactive:   makeIcon("/static/images/non_active.png"), // czerwony
-  detected:   makeIcon("/static/images/drone.png"),    // szary
-  selected:   makeIcon("/static/images/marked.png"),   // niebieski
+  detected:   makeIcon("/static/images/drone.png"),      // szary
+  selected:   makeIcon("/static/images/marked.png"),     // niebieski
 };
 
 /* ---------- konfiguracja ---------- */
 const API = "/api/telemetry/latest";
-const ACTIVE_MS   = 5000;   // < 5 s  → aktywny
-const DETECT_MS   = 10000;  // >10 s → wykryty znika
+const ACTIVE_MS   = 5000;   // < 5 s  → aktywny
+const DETECT_MS   = 10000;  // >10 s  → znika z „Wykrytych”
 
 /* ---------- stan ---------- */
-let accepted = new Set();      // zaakceptowane ID
-let selected = null;           // aktualnie kliknięte ID
-let lastSeen = {};             // ID → ms od epoch
-let markers  = {};             // ID → L.marker
+let accepted = new Set();     // drony zaakceptowane (pozostają na liście na zawsze)
+let selected = null;          // kliknięty dron
+let lastSeen = {};            // ID → czas w ms (Epoch)
+let markers  = {};            // ID → L.marker
 let map;
 
 /* ---------- mapa ---------- */
-function initMap() {
-  map = L.map("map").setView([52.1, 19.3], 6);
+function initMap(){
+  map = L.map("map").setView([52.1,19.3],6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-              {attribution:"© OpenStreetMap"}).addTo(map);
+              {attribution:"© OpenStreetMap"}).addTo(map);
 }
 
 /* ---------- status drona ---------- */
 function statusOf(id){
   const t = lastSeen[id];
-  if (!t) return "gone";
-  const ago = Date.now() - t;
-  if (ago > DETECT_MS)      return "gone";      // usuń
-  if (ago > ACTIVE_MS)      return "inactive";  // w accepted → nieaktywny
-  return "active";                              // w accepted → aktywny
+  if(!t) return accepted.has(id)? "inactive" : "gone";   // brak danych
+
+  const age = Date.now() - t;
+
+  if(accepted.has(id)){
+    return age <= ACTIVE_MS ? "active" : "inactive";   // nigdy "gone"
+  }else{
+    if(age > DETECT_MS)      return "gone";
+    return "detected";                                // w ciągu 10 s
+  }
 }
 
-/* ---------- render list ---------- */
-function render(allIds){
-  const aDiv = document.getElementById("active-list");
-  const iDiv = document.getElementById("inactive-list");
-  const dDiv = document.getElementById("detected-list");
+/* ---------- rysowanie list ---------- */
+function renderLists(ids){
+  const aDiv=document.getElementById("active-list");
+  const iDiv=document.getElementById("inactive-list");
+  const dDiv=document.getElementById("detected-list");
 
-  // wyczyść
-  [aDiv,iDiv,dDiv].forEach(div=>div.innerHTML="");
+  aDiv.innerHTML=iDiv.innerHTML=dDiv.innerHTML="";
 
-  // posortowane ID dla powtarzalności
-  allIds.sort();
+  let cntA=0,cntI=0,cntD=0;
 
-  let anyA=0, anyI=0, anyD=0;
+  ids.sort().forEach(id=>{
+    const st=statusOf(id);
+    if(st==="gone") return;
 
-  allIds.forEach(id=>{
-    const st = statusOf(id);
-    let divParent, cls, btnTxt, btnHandler;
+    let parent,cls,btnTxt,btnAct;
 
-    if (accepted.has(id)) {
-      if (st==="active"){   divParent=aDiv; cls="active";   anyA++; }
-      else if(st==="inactive"){ divParent=iDiv; cls="inactive"; anyI++; }
-      else { accepted.delete(id); return; }           // gone
-      btnTxt="Usuń"; btnHandler=()=>{accepted.delete(id); refresh();};
-    } else { // niezaakceptowany
-      if (st==="gone") return;                        // zbyt stary → ignoruj
-      divParent=dDiv; cls="detected"; anyD++;
-      btnTxt="Akceptuj"; btnHandler=()=>{accepted.add(id); refresh();};
+    if(accepted.has(id)){
+      if(st==="active"){ parent=aDiv; cls="active"; cntA++; }
+      else              { parent=iDiv; cls="inactive"; cntI++; }
+
+      btnTxt="Usuń";
+      btnAct=()=>{ accepted.delete(id); if(selected===id)selected=null; refresh(); };
+    }else{                                   // wykryty
+      parent=dDiv; cls="detected"; cntD++;
+      btnTxt="Akceptuj";
+      btnAct=()=>{ accepted.add(id); if(!selected)selected=id; refresh(); };
     }
 
     const row=document.createElement("div");
     row.className=`item ${cls}${id===selected?" selected":""}`;
     row.textContent=id;
-    row.onclick=()=>{selected=id; refresh();};
 
     const btn=document.createElement("button");
     btn.textContent=btnTxt;
-    btn.onclick=e=>{e.stopPropagation(); btnHandler();};
+    btn.onclick=e=>{e.stopPropagation(); btnAct();};
     row.appendChild(btn);
 
-    divParent.appendChild(row);
+    row.onclick=()=>{selected=id; refresh();};
+
+    parent.appendChild(row);
   });
 
-  if(!anyA) aDiv.innerHTML="<em>Brak</em>";
-  if(!anyI) iDiv.innerHTML="<em>Brak</em>";
-  if(!anyD) dDiv.innerHTML="<em>Brak</em>";
+  if(!cntA) aDiv.innerHTML="<em>Brak</em>";
+  if(!cntI) iDiv.innerHTML="<em>Brak</em>";
+  if(!cntD) dDiv.innerHTML="<em>Brak</em>";
 }
 
 /* ---------- markery ---------- */
 function updateMarkers(data){
+  // aktualizuj lastSeen
   data.forEach(d=>{
-    const id=d.drone_id;
-    const pos=[d.lat,d.lon];
+    lastSeen[d.drone_id]=Date.parse(d.timestamp.split(".")[0]+"Z");
+  });
 
-    // timestamp → ms (obcinamy mikrosekundy: 'YYYY-MM-DDTHH:MM:SS')
-    const tsMs = Date.parse(d.timestamp.split(".")[0]+"Z");
-    lastSeen[id]=tsMs;
+  const seenNow = new Set();
 
-    const st = statusOf(id);
+  // aktualizuj / twórz markery z nowych rekordów
+  data.forEach(d=>{
+    const id=d.drone_id, pos=[d.lat,d.lon];
+    const st=statusOf(id);
     if(st==="gone") return;
+    seenNow.add(id);
 
-    const icon = (id===selected)       ? ICON.selected :
-                 (!accepted.has(id))   ? ICON.detected :
-                 (st==="inactive")     ? ICON.inactive :
-                                         ICON.active;
+    let icon = (id===selected) ? ICON.selected :
+               (!accepted.has(id)) ? ICON.detected :
+               (st==="active") ? ICON.active : ICON.inactive;
 
     if(!markers[id]){
       markers[id]=L.marker(pos,{icon}).addTo(map).bindPopup(id)
                    .on("click",()=>{selected=id; refresh();});
-    } else {
+    }else{
       markers[id].setLatLng(pos).setIcon(icon);
     }
   });
 
-  /* usuwamy markery dronów, których nie ma w lastSeen (przestarzałe) */
+  // zaktualizuj ikony dronów zaakceptowanych, które dziś NIE przysłały pakietu
+  accepted.forEach(id=>{
+    if(seenNow.has(id)) return;
+    const st=statusOf(id);                    // na pewno inactive
+    let icon=(id===selected)?ICON.selected:ICON.inactive;
+
+    if(!markers[id]) return;                  // może zniknął, ale accepted → nic
+    markers[id].setIcon(icon);
+  });
+
+  // usuń marker tylko dla niewykrytych i niezaakceptowanych „gone”
   Object.keys(markers).forEach(id=>{
-    if(statusOf(id)==="gone"){
+    if(statusOf(id)==="gone" && !accepted.has(id)){
       map.removeLayer(markers[id]);
       delete markers[id];
       delete lastSeen[id];
-      accepted.delete(id);
-      if(selected===id) selected=null;
     }
   });
 }
@@ -132,11 +147,10 @@ async function refresh(){
   try{
     const res=await fetch(API);
     const data=await res.json();
-    console.log("Odebrano rekordów:", data.length);
 
-    const ids=[...new Set(data.map(d=>d.drone_id))];
+    const ids=[...new Set(data.map(d=>d.drone_id)), ...accepted]; // dodaj zaakceptowane, gdyby nic nie wysłały
     updateMarkers(data);
-    render(ids);
+    renderLists(ids);
   }catch(e){console.error(e);}
 }
 
@@ -144,5 +158,5 @@ async function refresh(){
 document.addEventListener("DOMContentLoaded",()=>{
   initMap();
   refresh();
-  setInterval(refresh, 3000);
+  setInterval(refresh,3000);
 });
