@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <title>Drony – panel</title>
+  
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -27,7 +29,10 @@
     <h3>Aktywne</h3>
     <div id="active-list"><em>Brak</em></div>
 
-    <h3 style="margin-top:14px;">Wykryte</h3>
+    <h3>Nieaktywne</h3>
+    <div id="inactive-list"><em>Brak</em></div>
+
+    <h3>Wykryte</h3>
     <div id="detected-list"><em>Brak</em></div>
   </div>
 

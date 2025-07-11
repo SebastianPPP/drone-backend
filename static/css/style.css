@@ -1,0 +1,23 @@
+/* wspólne */
+body{margin:0;font-family:sans-serif;display:flex;height:100vh}
+#sidebar{width:250px;background:#f4f4f4;border-right:1px solid #ccc;padding:10px;overflow-y:auto}
+#sidebar h3{margin:8px 0 4px;font-size:.95rem}
+
+/* wiersz drona */
+.item{
+  padding:6px 8px 6px 10px;
+  margin-bottom:4px;
+  border-radius:4px;
+  cursor:pointer;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.item:hover{filter:brightness(0.95);}
+.btn-action{
+  background:none;border:none;font-size:0.9rem;cursor:pointer;
+}
+
+/* kolory wg kategorii */
+.item.active   {background:#e8f5e9;border-left:6px solid #2e7d32;}  /* zielony */
+.item.inactive {background:#ffebee;border-left:6px solid #c62828;}  /* czerwony */
+.item.detected {background:#eeeeee;border-left:6px solid #757575;}  /* szary   */
+.item.selected {outline:2px solid #1565c0;}                         /* niebieski obrys */
