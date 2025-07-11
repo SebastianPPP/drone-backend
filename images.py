@@ -2,9 +2,10 @@
 from PIL import Image, ImageDraw
 
 COLORS = {
-    "marked":     (198, 40,  40, 255),   # czerwony
-    "active":     ( 46,125,  50, 255),   # zielony
-    "non_active": (117,117, 117, 255),   # szary
+    "marked":     ( 33, 150, 243, 255),   # niebieski (blue)
+    "active":     ( 46, 125,  50, 255),   # zielony (green)
+    "non_active": (198, 40,  40, 255),    # czerwony (red)
+    "drone":      (117,117,117, 255),     # szary (gray)
 }
 
 def boat(draw):
