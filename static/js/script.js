@@ -23,7 +23,7 @@ const iconSelected = new L.Icon({           // niebieski – kliknięty
 /* ---------- konfiguracja ---------- */
 const apiAll  = "/api/telemetry/latest";
 const apiList = "/api/drones";
-const OFFLINE_MS = 5000;            // 5 s bez danych → nieaktywne
+const OFFLINE_MS = 5000;  // 5 sekund bez danych → dron nieaktywny
 
 /* ---------- stan aplikacji ---------- */
 let acceptedSet = new Set();        // drony “monitorowane” (aktywny/nieaktywny)
@@ -146,13 +146,17 @@ function updateMarkers(data) {
 
 /* ---------- zapytania ---------- */
 function refreshOnce(){
-  Promise.all([fetch(apiList).then(r=>r.json()), fetch(apiAll).then(r=>r.json())])
-    .then(([ids,data])=>{
-      renderLists(ids);
-      updateMarkers(data);
-    })
-    .catch(console.error);
+  Promise.all([
+    fetch(apiList).then(r => r.json()),
+    fetch(apiAll).then(r => r.json())
+  ])
+  .then(([ids, data]) => {
+    updateMarkers(data);  // najpierw aktualizujemy lastSeenMap i markery
+    renderLists(ids);     // potem renderujemy listy dronów
+  })
+  .catch(console.error);
 }
+
 
 /* ---------- start + pętla ---------- */
 initMap();
