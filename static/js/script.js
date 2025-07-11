@@ -1,171 +1,148 @@
 /* ---------- ikony ---------- */
-const iconActive = new L.Icon({           // zielony – online
-  iconUrl: "/static/images/active.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-});
-const iconInactive = new L.Icon({         // czerwony – offline
-  iconUrl: "/static/images/non_active.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-});
-const iconDetected = new L.Icon({         // szary – niezaakceptowany
-  iconUrl: "/static/images/drone.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-});
-const iconSelected = new L.Icon({         // niebieski – kliknięty
-  iconUrl: "/static/images/marked.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-});
+function makeIcon(url) {
+  return new L.Icon({
+    iconUrl: url,
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+    iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+  });
+}
+const ICON = {
+  active:     makeIcon("/static/images/active.png"),   // zielony
+  inactive:   makeIcon("/static/images/non_active.png"), // czerwony
+  detected:   makeIcon("/static/images/drone.png"),    // szary
+  selected:   makeIcon("/static/images/marked.png"),   // niebieski
+};
 
 /* ---------- konfiguracja ---------- */
-const apiAll = "/api/telemetry/latest";
-const apiList = "/api/drones";
-const ACTIVE_THRESHOLD = 5000;   // 5 sekund
-const DETECTED_TIMEOUT = 10000;  // 10 sekund
+const API = "/api/telemetry/latest";
+const ACTIVE_MS   = 5000;   // < 5 s  → aktywny
+const DETECT_MS   = 10000;  // >10 s → wykryty znika
 
-/* ---------- stan aplikacji ---------- */
-let acceptedSet = new Set();        // drony zaakceptowane (aktywne/nieaktywne)
-let selectedId = null;              // dron wybrany przez użytkownika
-let markers = {};                  // id → marker leaflet
-let lastSeenMap = {};              // id → timestamp ostatniego sygnału
+/* ---------- stan ---------- */
+let accepted = new Set();      // zaakceptowane ID
+let selected = null;           // aktualnie kliknięte ID
+let lastSeen = {};             // ID → ms od epoch
+let markers  = {};             // ID → L.marker
 let map;
 
 /* ---------- mapa ---------- */
 function initMap() {
   map = L.map("map").setView([52.1, 19.3], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap",
-  }).addTo(map);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              {attribution:"© OpenStreetMap"}).addTo(map);
 }
 
-/* ---------- funkcja sprawdzająca status drona ---------- */
-function droneStatus(id) {
-  const ts = lastSeenMap[id];
-  if (!ts) return "gone"; // brak sygnału, do usunięcia
-
-  const delta = Date.now() - new Date(ts).getTime();
-
-  if (delta > DETECTED_TIMEOUT) return "gone";      // usuń z wykrytych
-  if (delta > ACTIVE_THRESHOLD) return "inactive";  // nieaktywny
-  return "active";                                   // aktywny
+/* ---------- status drona ---------- */
+function statusOf(id){
+  const t = lastSeen[id];
+  if (!t) return "gone";
+  const ago = Date.now() - t;
+  if (ago > DETECT_MS)      return "gone";      // usuń
+  if (ago > ACTIVE_MS)      return "inactive";  // w accepted → nieaktywny
+  return "active";                              // w accepted → aktywny
 }
 
-/* ---------- renderowanie list ---------- */
-function renderLists(allIds) {
-  const elActive = document.getElementById("active-list");
-  const elInactive = document.getElementById("inactive-list");
-  const elDetected = document.getElementById("detected-list");
+/* ---------- render list ---------- */
+function render(allIds){
+  const aDiv = document.getElementById("active-list");
+  const iDiv = document.getElementById("inactive-list");
+  const dDiv = document.getElementById("detected-list");
 
-  // Usuń z acceptedSet drony, które "gone"
-  acceptedSet.forEach(id => {
-    if (droneStatus(id) === "gone") acceptedSet.delete(id);
-  });
+  // wyczyść
+  [aDiv,iDiv,dDiv].forEach(div=>div.innerHTML="");
 
-  /** HELPER - tworzenie elementu listy */
-  const makeItem = (id, cls, onClick, btnIcon, btnTitle, btnHandler) => {
-    const div = document.createElement("div");
-    div.className = `item ${cls}` + (id === selectedId ? " selected" : "");
-    div.textContent = id;
-    div.onclick = onClick;
+  // posortowane ID dla powtarzalności
+  allIds.sort();
 
-    if (btnIcon) {
-      const btn = document.createElement("button");
-      btn.className = "btn-action";
-      btn.title = btnTitle;
-      btn.innerHTML = btnIcon;
-      btn.onclick = (e) => { e.stopPropagation(); btnHandler(); };
-      div.appendChild(btn);
+  let anyA=0, anyI=0, anyD=0;
+
+  allIds.forEach(id=>{
+    const st = statusOf(id);
+    let divParent, cls, btnTxt, btnHandler;
+
+    if (accepted.has(id)) {
+      if (st==="active"){   divParent=aDiv; cls="active";   anyA++; }
+      else if(st==="inactive"){ divParent=iDiv; cls="inactive"; anyI++; }
+      else { accepted.delete(id); return; }           // gone
+      btnTxt="Usuń"; btnHandler=()=>{accepted.delete(id); refresh();};
+    } else { // niezaakceptowany
+      if (st==="gone") return;                        // zbyt stary → ignoruj
+      divParent=dDiv; cls="detected"; anyD++;
+      btnTxt="Akceptuj"; btnHandler=()=>{accepted.add(id); refresh();};
     }
-    return div;
-  };
 
-  /* ---- AKTYWNE ---- */
-  const activeIds = [...acceptedSet].filter(id => droneStatus(id) === "active");
-  elActive.innerHTML = activeIds.length ? "" : "<em>Brak</em>";
-  activeIds.forEach(id => {
-    elActive.appendChild(
-      makeItem(
-        id, "active",
-        () => { selectedId = id; refreshOnce(); },
-        "✖", "Usuń",
-        () => { acceptedSet.delete(id); refreshOnce(); }
-      )
-    );
+    const row=document.createElement("div");
+    row.className=`item ${cls}${id===selected?" selected":""}`;
+    row.textContent=id;
+    row.onclick=()=>{selected=id; refresh();};
+
+    const btn=document.createElement("button");
+    btn.textContent=btnTxt;
+    btn.onclick=e=>{e.stopPropagation(); btnHandler();};
+    row.appendChild(btn);
+
+    divParent.appendChild(row);
   });
 
-  /* ---- NIEAKTYWNE ---- */
-  const inactiveIds = [...acceptedSet].filter(id => droneStatus(id) === "inactive");
-  elInactive.innerHTML = inactiveIds.length ? "" : "<em>Brak</em>";
-  inactiveIds.forEach(id => {
-    elInactive.appendChild(
-      makeItem(
-        id, "inactive",
-        () => { selectedId = id; refreshOnce(); },
-        "✖", "Usuń",
-        () => { acceptedSet.delete(id); refreshOnce(); }
-      )
-    );
-  });
-
-  /* ---- WYKRYTE ---- */
-  const detected = allIds.filter(id => !acceptedSet.has(id) && droneStatus(id) !== "gone");
-  elDetected.innerHTML = detected.length ? "" : "<em>Brak</em>";
-  detected.forEach(id => {
-    elDetected.appendChild(
-      makeItem(
-        id, "detected",
-        () => { selectedId = id; refreshOnce(); },
-        "✓", "Akceptuj",
-        () => { acceptedSet.add(id); if (!selectedId) selectedId = id; refreshOnce(); }
-      )
-    );
-  });
+  if(!anyA) aDiv.innerHTML="<em>Brak</em>";
+  if(!anyI) iDiv.innerHTML="<em>Brak</em>";
+  if(!anyD) dDiv.innerHTML="<em>Brak</em>";
 }
 
-/* ---------- aktualizacja markerów ---------- */
-function updateMarkers(data) {
-  // aktualizuj lastSeenMap
-  data.forEach(d => { lastSeenMap[d.drone_id] = d.timestamp; });
+/* ---------- markery ---------- */
+function updateMarkers(data){
+  data.forEach(d=>{
+    const id=d.drone_id;
+    const pos=[d.lat,d.lon];
 
-  data.forEach(rec => {
-    const id = rec.drone_id;
-    const pos = [rec.lat, rec.lon];
-    const inSet = acceptedSet.has(id);
-    const status = droneStatus(id);
-    let icon;
+    // timestamp → ms (obcinamy mikrosekundy: 'YYYY-MM-DDTHH:MM:SS')
+    const tsMs = Date.parse(d.timestamp.split(".")[0]+"Z");
+    lastSeen[id]=tsMs;
 
-    if (id === selectedId) icon = iconSelected;
-    else if (!inSet && status !== "gone") icon = iconDetected;
-    else if (inSet && status === "inactive") icon = iconInactive;
-    else if (inSet && status === "active") icon = iconActive;
-    else return; // status "gone" - nie pokazuj markera
+    const st = statusOf(id);
+    if(st==="gone") return;
 
-    if (!markers[id]) {
-      markers[id] = L.marker(pos, { icon }).addTo(map).bindPopup(id);
-      markers[id].on("click", () => { selectedId = id; refreshOnce(); });
+    const icon = (id===selected)       ? ICON.selected :
+                 (!accepted.has(id))   ? ICON.detected :
+                 (st==="inactive")     ? ICON.inactive :
+                                         ICON.active;
+
+    if(!markers[id]){
+      markers[id]=L.marker(pos,{icon}).addTo(map).bindPopup(id)
+                   .on("click",()=>{selected=id; refresh();});
     } else {
       markers[id].setLatLng(pos).setIcon(icon);
     }
   });
+
+  /* usuwamy markery dronów, których nie ma w lastSeen (przestarzałe) */
+  Object.keys(markers).forEach(id=>{
+    if(statusOf(id)==="gone"){
+      map.removeLayer(markers[id]);
+      delete markers[id];
+      delete lastSeen[id];
+      accepted.delete(id);
+      if(selected===id) selected=null;
+    }
+  });
 }
 
-/* ---------- pobieranie danych i odświeżanie ---------- */
-function refreshOnce() {
-  Promise.all([
-    fetch(apiList).then(r => r.json()),
-    fetch(apiAll).then(r => r.json())
-  ])
-  .then(([ids, data]) => {
+/* ---------- główny fetch ---------- */
+async function refresh(){
+  try{
+    const res=await fetch(API);
+    const data=await res.json();
+    console.log("Odebrano rekordów:", data.length);
+
+    const ids=[...new Set(data.map(d=>d.drone_id))];
     updateMarkers(data);
-    renderLists(ids);
-  })
-  .catch(console.error);
+    render(ids);
+  }catch(e){console.error(e);}
 }
 
-/* ---------- start + pętla ---------- */
-initMap();
-refreshOnce();
-setInterval(refreshOnce, 3000);
+/* ---------- start ---------- */
+document.addEventListener("DOMContentLoaded",()=>{
+  initMap();
+  refresh();
+  setInterval(refresh, 3000);
+});
