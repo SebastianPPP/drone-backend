@@ -1,89 +1,127 @@
-/* --- konfiguracja --- */
-const apiAll  = "/api/telemetry/latest";   // wszystkie dane
-const apiList = "/api/drones";             // tylko nazwy
-const blueIcon = new L.Icon.Default();
-
-/* czerwony marker (Leaflet‑colour‑markers) */
-const redIcon = new L.Icon({
-  iconUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x-red.png",
-  shadowUrl:
-    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
+/* -------- ikony -------- */
+const blueIcon = new L.Icon.Default();              // online
+const redIcon  = new L.Icon({                       // offline
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x-red.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
+});
+const greenIcon = new L.Icon({                      // wybrany
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x-green.png",
+  shadowUrl:"https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize:[25,41],iconAnchor:[12,41],popupAnchor:[1,-34],shadowSize:[41,41],
 });
 
-/* --- inicjalizacja mapy --- */
-const map = L.map("map").setView([52.1, 19.3], 6);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "&copy; OpenStreetMap contributors",
-}).addTo(map);
+/* -------- konfiguracja -------- */
+const apiAll  = "/api/telemetry/latest";
+const apiList = "/api/drones";
+const OFFLINE_MS = 5000;            // 5 s bez danych → offline
 
-/* --- dane runtime --- */
-let markers = {};
-let selectedId = null;
+/* -------- stan aplikacji -------- */
+let activeSet   = new Set();        // zaakceptowane drony
+let selectedId  = null;             // aktualnie wybrany
+let markers     = {};               // id → L.marker
+let lastSeenMap = {};               // id → czas ISO
+let map;
 
-/* --- funkcje pomocnicze --- */
-function renderSidebar(ids) {
-  const listDiv = document.getElementById("drone-list");
-  if (ids.length === 0) {
-    listDiv.innerHTML = "<em>Brak aktywnych dronów</em>";
-    return;
-  }
-  listDiv.innerHTML = "";
-  ids.forEach((id) => {
-    const item = document.createElement("div");
-    item.className = "drone-item" + (id === selectedId ? " active" : "");
-    item.innerText = id;
-    item.onclick = () => {
-      selectedId = id;
-      renderSidebar(ids);
-      updateMarkers();          // przerysuj markery z kolorem
-      if (markers[id]) map.setView(markers[id].getLatLng(), 14);
+/* -------- mapa -------- */
+function initMap() {
+  map = L.map("map").setView([52.1, 19.3], 6);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution:"© OpenStreetMap",
+  }).addTo(map);
+}
+
+/* -------- render list po prawej -------- */
+function renderLists(allIds) {
+  const activeDiv   = document.getElementById("active-list");
+  const detectedDiv = document.getElementById("detected-list");
+
+  // usuń stale nieistniejące z activeSet
+  activeSet.forEach(id => { if (!allIds.includes(id)) activeSet.delete(id); });
+
+  /* --- AKTYWNE --- */
+  activeDiv.innerHTML = "";
+  if (activeSet.size === 0) activeDiv.innerHTML = "<em>Brak</em>";
+  activeSet.forEach(id => {
+    const li = document.createElement("div");
+    li.className = "item" +
+      (id === selectedId ? " active" : "") +
+      (isOffline(id) ? " offline" : "");
+    li.textContent = id;
+    li.onclick = () => { selectedId = id; updateMarkers(); renderLists(allIds); };
+    activeDiv.appendChild(li);
+  });
+
+  /* --- WYKRYTE --- */
+  const detected = allIds.filter(id => !activeSet.has(id));
+  detectedDiv.innerHTML = "";
+  if (detected.length === 0) detectedDiv.innerHTML = "<em>Brak</em>";
+  detected.forEach(id => {
+    const li = document.createElement("div");
+    li.className = "item";
+    li.textContent = id;
+
+    // przycisk „Akceptuj”
+    const btn = document.createElement("button");
+    btn.className = "btn-acc";
+    btn.textContent = "Akceptuj";
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      activeSet.add(id);
+      if (!selectedId) selectedId = id;
+      renderLists(allIds);
+      updateMarkers();
     };
-    listDiv.appendChild(item);
+    li.appendChild(btn);
+    detectedDiv.appendChild(li);
   });
 }
 
+/* -------- sprawdź offline -------- */
+function isOffline(id){
+  const ts = lastSeenMap[id];
+  if (!ts) return true;
+  return Date.now() - new Date(ts).getTime() > OFFLINE_MS;
+}
+
+/* -------- marker logic -------- */
 function updateMarkers() {
   fetch(apiAll)
-    .then((r) => r.json())
-    .then((data) => {
-      data.forEach((d) => {
-        const { drone_id, lat, lon } = d;
-        if (!lat || !lon) return;
+    .then(r => r.json())
+    .then(data => {
+      // zaktualizuj lastSeenMap
+      data.forEach(d => { lastSeenMap[d.drone_id] = d.timestamp; });
 
-        const pos = [lat, lon];
-        if (!markers[drone_id]) {
-          markers[drone_id] = L.marker(pos, {
-            icon: drone_id === selectedId ? redIcon : blueIcon,
-          })
-            .addTo(map)
-            .bindPopup(`${drone_id}`);
+      // odśwież markery tylko dla aktywnych
+      activeSet.forEach(id => {
+        const rec = data.find(d => d.drone_id === id);
+        if (!rec) return;
+
+        const pos = [rec.lat, rec.lon];
+        const offline = isOffline(id);
+        const icon = (id === selectedId) ? greenIcon : (offline ? redIcon : blueIcon);
+
+        if (!markers[id]) {
+          markers[id] = L.marker(pos,{icon}).addTo(map).bindPopup(id);
         } else {
-          markers[drone_id].setLatLng(pos);
-          markers[drone_id].setIcon(
-            drone_id === selectedId ? redIcon : blueIcon
-          );
+          markers[id].setLatLng(pos).setIcon(icon);
         }
       });
-    })
-    .catch((e) => console.error(e));
+    });
 }
 
-/* --- cykliczne odświeżanie listy i pozycji --- */
+/* -------- główna pętla -------- */
 function refresh() {
   fetch(apiList)
-    .then((r) => r.json())
-    .then((ids) => {
-      if (!selectedId && ids.length) selectedId = ids[0]; // wybierz 1‑szego
-      renderSidebar(ids);
+    .then(r => r.json())
+    .then(ids => {
+      renderLists(ids);
       updateMarkers();
     })
-    .catch((e) => console.error(e));
+    .catch(console.error);
 }
 
+/* -------- start -------- */
+initMap();
 refresh();
-setInterval(refresh, 4000);
+setInterval(refresh, 3000);
