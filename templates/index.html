@@ -3,18 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <title>Drony na mapie</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
   <style>
-    #map { height: 500px; }
-    body { font-family: sans-serif; padding: 20px; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:sans-serif;display:flex;height:100vh}
+    #sidebar{
+      width:220px;min-width:180px;background:#f4f4f4;border-right:1px solid #ccc;
+      padding:10px;overflow-y:auto
+    }
+    #sidebar h2{margin:0 0 10px;font-size:1.1rem}
+    .drone-item{
+      cursor:pointer;padding:6px 8px;margin-bottom:6px;border-radius:4px;
+    }
+    .drone-item:hover{background:#e0e0e0}
+    .drone-item.active{background:#e53935;color:#fff;font-weight:600}
+    #map{flex:1}
   </style>
 </head>
 <body>
-  <h2>Pozycje dronów</h2>
-  <p id="status">Wczytywanie...</p>
+
+  <div id="sidebar">
+    <h2>Dostępne drony</h2>
+    <div id="drone-list">Ładowanie…</div>
+  </div>
+
   <div id="map"></div>
 
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+<script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
 </html>

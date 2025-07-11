@@ -33,3 +33,8 @@ def get_all_latest_telemetry():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
+@app.route("/api/drones", methods=["GET"])
+def list_drones():
+    return jsonify(sorted(latest_data.keys()))
+
