@@ -159,6 +159,9 @@ document.addEventListener("DOMContentLoaded", () => {
   refresh();
   setInterval(refresh, 3000);
   loadMission();
+  document.getElementById("generate-path-btn").onclick = () => {
+    generateFlightPath(50); // domyślny krok 50 metrów
+  };
 });
 
 
@@ -334,4 +337,49 @@ function loadMission() {
   } catch (e) {
     console.warn("Nie udało się załadować misji", e);
   }
+}
+
+/* ---------- generowanie tras ---------- */
+
+function generateFlightPath(stepMeters = 50) {
+  if (!missionPolygon) return;
+
+  const coords = missionPolygon.getLatLngs()[0].map(p => [p.lng, p.lat]);
+  const polygon = turf.polygon([[...coords, coords[0]]]);
+
+  const bbox = turf.bbox(polygon);
+  const lines = [];
+  const step = stepMeters / 111320; // approx meters to degrees
+  let y = bbox[1];
+  let toggle = false;
+
+  while (y <= bbox[3]) {
+    const p1 = [bbox[0], y];
+    const p2 = [bbox[2], y];
+    const line = turf.lineString([p1, p2]);
+    const clipped = turf.lineIntersect(line, polygon);
+
+    if (clipped.features.length >= 2) {
+      const sorted = clipped.features
+        .map(f => f.geometry.coordinates)
+        .sort((a, b) => a[0] - b[0]);
+
+      if (toggle) sorted.reverse();
+      lines.push(...sorted);
+      toggle = !toggle;
+    }
+
+    y += step;
+  }
+
+  if (lines.length < 2) return;
+
+  if (window.flightLine) map.removeLayer(window.flightLine);
+  window.flightLine = L.polyline(lines.map(c => [c[1], c[0]]), {
+    color: 'blue',
+    weight: 2
+  }).addTo(map);
+
+  const total = turf.length(turf.lineString(lines), { units: 'kilometers' }).toFixed(2);
+  document.getElementById("mission-info").textContent += `\nDługość trasy: ${total} km`;
 }
