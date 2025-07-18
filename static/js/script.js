@@ -21,6 +21,7 @@ const API = "/api/telemetry/latest";
 const ACTIVE_MS = 5000;   // <5 s → aktywny
 const DETECT_MS = 10000;  // >10 s → usuwamy z wykrytych
 const ACCEPTED_KEY = "acceptedDrones"; // klucz w localStorage
+const MISSION_KEY = "savedMission"; // klucz dla misji w localStorage
 
 /* ---------- stan ---------- */
 let accepted = new Set();   // drony zaakceptowane – trwałe
@@ -157,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initMap();
   refresh();
   setInterval(refresh, 3000);
+  loadMission();
 });
 
 
@@ -233,6 +235,8 @@ function finishMission() {
 
   document.getElementById("mission-info").textContent = "Obszar zaznaczony.";
   document.getElementById("clear-mission-btn").disabled = false; // teraz można usunąć
+
+  saveMission();
 }
 
 
@@ -272,8 +276,62 @@ function clearMission() {
     map.removeLayer(missionPolygon);
     missionPolygon = null;
   }
+  localStorage.removeItem(MISSION_KEY);
   missionMode = false;
   document.getElementById("mission-info").textContent = "Misja usunięta.";
   document.getElementById("clear-mission-btn").disabled = true;
 }
 
+
+function saveMission() {
+  try {
+    const coords = missionPoints.map(p => [p.lat, p.lng]);
+    localStorage.setItem(MISSION_KEY, JSON.stringify(coords));
+  } catch (e) {
+    console.warn("Nie udało się zapisać misji", e);
+  }
+}
+
+function loadMission() {
+  try {
+    const data = JSON.parse(localStorage.getItem(MISSION_KEY));
+    if (!Array.isArray(data) || data.length < 3) return;
+
+    missionPoints = data.map(pair => L.latLng(pair[0], pair[1]));
+
+    // Dodaj markery
+    missionMarkers = missionPoints.map((latlng, idx) => {
+      const marker = L.marker(latlng, {
+        draggable: true,
+        icon: L.divIcon({
+          className: 'mission-marker',
+          html: `<div style="width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #000;"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6]
+        })
+      }).addTo(map);
+
+      marker.on("drag", function (ev) {
+        missionPoints[idx] = ev.target.getLatLng();
+        updateMissionPolygon();
+        saveMission(); // zapisuj po każdym drag
+      });
+
+      marker.on("contextmenu", function () {
+        map.removeLayer(marker);
+        missionMarkers.splice(idx, 1);
+        missionPoints.splice(idx, 1);
+        updateMissionPolygon();
+        saveMission();
+      });
+
+      return marker;
+    });
+
+    updateMissionPolygon();
+    document.getElementById("clear-mission-btn").disabled = false;
+    document.getElementById("mission-info").textContent = "Misja przywrócona.";
+  } catch (e) {
+    console.warn("Nie udało się załadować misji", e);
+  }
+}
