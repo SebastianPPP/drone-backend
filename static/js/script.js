@@ -197,12 +197,48 @@ function finishMission() {
   document.getElementById("mission-info").textContent = "Obszar zaznaczony";
 }
 
-function onMapClickMission(e) {
-  missionPoints.push(e.latlng.lat, e.latlng.lng);
-  if (missionLine) {
-    missionLine.setLatLngs(missionPoints);
+function addMissionPoint(e) {
+  console.log("Kliknięto mapę:", e.latlng);
+
+  const latlng = e.latlng;
+
+  // Dodaj punkt do listy
+  missionPoints.push(latlng);
+
+  // Dodaj marker na mapie
+  const marker = L.circleMarker(latlng, {
+    radius: 6,
+    color: '#000',
+    fillColor: '#555',
+    fillOpacity: 0.7
+  }).addTo(map);
+
+  missionMarkers.push(marker);
+
+  // Jeśli >= 3 punkty, rysuj obszar
+  if (missionPoints.length >= 3) {
+  if (missionPolygon) {
+      missionPolygon.setLatLngs(missionPoints.concat([missionPoints[0]]));
+    } else {
+      missionPolygon = L.polygon(missionPoints.concat([missionPoints[0]]), {
+        color: "#999",
+        weight: 2,
+        fillColor: "#aaa",
+        fillOpacity: 0.3
+      }).addTo(map);
+    }
+
+    // === Pokaż współrzędne ===
+    const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
+
+    // Możesz wyświetlić w alert:
+    alert("Dodano misję. Punkty:\n" + coordList);
+
+    // Albo do konsoli:
+    console.log("Punkty misji:\n" + coordList);
+
+    // Albo do jakiegoś elementu na stronie:
+    document.getElementById("mission-info").innerText = "Misja:\n" + coordList;
   }
-  else {
-    missionLine = L.polyline(missionPoints, { color: "blue" }).addTo(map);
-  }
+
 }
