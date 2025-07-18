@@ -28,6 +28,10 @@ let selected = null;
 let lastSeen = {};          // id → epoch ms
 let markers  = {};          // id → L.marker
 let map;
+let missionMode = false; // tryb misji 
+let missionPoints = [];
+let missionLine = null;
+let missionPolygon = null;
 
 /* ---------- persistence ---------- */
 function loadAccepted() {
@@ -58,6 +62,14 @@ function initMap() {
   map = L.map("map").setView([52.1, 19.3], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OSM" }).addTo(map);
 }
+
+document.getElementById("mission-btn").onclick = () => {
+  if (missionMode) {
+    finishMission();
+  } else {
+    startMission();
+  }
+};
 
 /* ---------- render list ---------- */
 function render(ids) {
@@ -145,3 +157,52 @@ document.addEventListener("DOMContentLoaded", () => {
   refresh();
   setInterval(refresh, 3000);
 });
+
+
+/* ---------- mission mode ---------- */
+function startMission() {
+  missionMode = true;
+  missionPoints = [];
+  if (missionLine) {
+    map.removeLayer(missionLine);
+    missionLine = null;
+  }
+  if (missionPolygon) {
+    map.removeLayer(missionPolygon);
+    missionPolygon = null;
+  }
+  document.getElementById("mission-info").textContent = "Tryb misji aktywny. Kliknij na mapę, aby dodać punkty.";
+  map.on("click", addMissionPoint);
+}
+
+function finishMission() {
+  if (missionPoints.length < 3) {
+    alert("Musisz dodać co najmniej 3 punkty do misji.");
+    return;
+  }
+  missionMode = false;
+  map.off("click", addMissionPoint);
+
+  if (missionLine) {
+    map.removeLayer(missionLine);
+    missionLine = null;
+  }
+
+  missionPolygon = L.polygon(missionPoints, {
+    color: "gray",
+    fillColor: "lightgray",
+    fillOpacity: 0.3,
+  }).addTo(map);
+
+  document.getElementById("mission-info").textContent = "Obszar zaznaczony";
+}
+
+function onMapClickMission(e) {
+  missionPoints.push(e.latlng.lat, e.latlng.lng);
+  if (missionLine) {
+    missionLine.setLatLngs(missionPoints);
+  }
+  else {
+    missionLine = L.polyline(missionPoints, { color: "blue" }).addTo(map);
+  }
+}

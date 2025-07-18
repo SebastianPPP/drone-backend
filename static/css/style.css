@@ -21,3 +21,21 @@ body{margin:0;font-family:sans-serif;display:flex;height:100vh}
 .item.inactive {background:#ffebee;border-left:6px solid #c62828;}  /* czerwony */
 .item.detected {background:#eeeeee;border-left:6px solid #757575;}  /* szary   */
 .item.selected {outline:2px solid #1565c0;}                         /* niebieski obrys */
+
+.sidebar-control{
+  margin-top:10px;
+  padding-top:6px;
+  border-top:1px solid #ccc;
+}
+
+#mission-btn{
+  background:#2196f3;
+  color:#fff;
+  border:none;
+  border-radius:4px;
+  padding:4px 10px;
+  cursor:pointer;
+  font-size:.85rem;
+}
+#mission-btn:hover{filter:brightness(.9);}
+#mission-info{color:#1565c0;font-size:.85rem;margin-left:6px;}
