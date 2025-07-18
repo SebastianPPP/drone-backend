@@ -355,50 +355,75 @@ function loadMission() {
 
 /* ---------- generowanie tras ---------- */
 
-function generateFlightPath(stepMeters = 50) {
+function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50) {
   if (!missionPolygon) return;
 
+  // 🧽 Usuń stare trasy
   if (window.flightLines) {
     window.flightLines.forEach(l => map.removeLayer(l));
   }
   window.flightLines = [];
 
   const coords = missionPolygon.getLatLngs()[0].map(p => [p.lng, p.lat]);
-  const polygon = turf.polygon([[...coords, coords[0]]]);
-
+  const polygon = turf.polygon([[...coords, coords[0]]]); // zamknięty ring
   const bbox = turf.bbox(polygon);
-  const lines = [];
-  const step = stepMeters / 111320; // approx meters to degrees
+  const stepDeg = stepMeters / 111320; // przybliżenie metry → stopnie
+
   let y = bbox[1];
+  const fullSegments = [];
   let toggle = false;
 
   while (y <= bbox[3]) {
-    const p1 = [bbox[0], y];
-    const p2 = [bbox[2], y];
-    const line = turf.lineString([p1, p2]);
-    const clipped = turf.lineIntersect(line, polygon);
+    const start = [bbox[0], y];
+    const end = [bbox[2], y];
+    const fullLine = turf.lineString([start, end]);
 
-    if (clipped.features.length >= 2) {
-      const sorted = clipped.features
-        .map(f => f.geometry.coordinates)
-        .sort((a, b) => a[0] - b[0]);
+    const clipped = turf.lineSplit(fullLine, polygon);
 
+    // Jeśli przecina, to clipped.features będą miały linię wewnątrz
+    clipped.features.forEach(feature => {
+      const line = feature.geometry.coordinates;
+      if (line.length < 2) return;
+
+      const sorted = [...line];
       if (toggle) sorted.reverse();
-      lines.push(...sorted);
+      fullSegments.push(sorted);
       toggle = !toggle;
-    }
+    });
 
-    y += step;
+    y += stepDeg;
   }
 
-  if (lines.length < 2) return;
+  if (fullSegments.length === 0) {
+    alert("Nie udało się wygenerować trasy – sprawdź, czy obszar nie jest zbyt mały.");
+    return;
+  }
 
-  if (window.flightLine) map.removeLayer(window.flightLine);
-  window.flightLine = L.polyline(lines.map(c => [c[1], c[0]]), {
-    color: 'blue',
-    weight: 2
-  }).addTo(map);
+  // Połącz segmenty naprzemiennie
+  const segments = [];
+  for (let i = 0; i < fullSegments.length - 1; i++) {
+    segments.push([fullSegments[i][0], fullSegments[i][1]]);
+    segments.push([fullSegments[i + 1][1], fullSegments[i + 1][0]]);
+    i++;
+  }
 
-  const total = turf.length(turf.lineString(lines), { units: 'kilometers' }).toFixed(2);
-  document.getElementById("mission-info").textContent += `\nDługość trasy: ${total} km`;
+  const total = segments.length;
+  const perDrone = Math.ceil(total / numDrones);
+  const colors = ["red", "green", "blue", "orange", "purple", "brown"];
+
+  for (let d = 0; d < numDrones; d++) {
+    const segs = segments.slice(d * perDrone, (d + 1) * perDrone);
+    if (!segs.length) continue;
+
+    const path = segs.flat();
+    const polyline = L.polyline(path.map(c => [c[1], c[0]]), {
+      color: colors[d % colors.length],
+      weight: 2
+    }).addTo(map);
+
+    window.flightLines.push(polyline);
+  }
+
+  const totalKm = turf.length(turf.lineString(segments.flat()), { units: 'kilometers' }).toFixed(2);
+  document.getElementById("mission-info").textContent += `\nWygenerowano ${numDrones} tras, ${totalKm} km łącznie.`;
 }
