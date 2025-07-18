@@ -160,8 +160,15 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(refresh, 3000);
   loadMission();
   document.getElementById("generate-path-btn").onclick = () => {
-    generateFlightPath(50); // domyślny krok 50 metrów
+    const n = parseInt(prompt("Ile dronów?", "3"), 10);
+    if (isNaN(n) || n < 1) return;
+
+    const s = parseFloat(prompt("Podaj krok (w metrach) — np. 50", "50"));
+    if (isNaN(s) || s <= 0) return;
+
+    generateFlightPathsForDrones(n, s);
   };
+
 });
 
 
@@ -279,6 +286,13 @@ function clearMission() {
     map.removeLayer(missionPolygon);
     missionPolygon = null;
   }
+
+    // 🧽 Usuń trasy lotów
+    if (window.flightLines) {
+      window.flightLines.forEach(l => map.removeLayer(l));
+      window.flightLines = [];
+    }
+
   localStorage.removeItem(MISSION_KEY);
   missionMode = false;
   document.getElementById("mission-info").textContent = "Misja usunięta.";
@@ -343,6 +357,11 @@ function loadMission() {
 
 function generateFlightPath(stepMeters = 50) {
   if (!missionPolygon) return;
+
+  if (window.flightLines) {
+    window.flightLines.forEach(l => map.removeLayer(l));
+  }
+  window.flightLines = [];
 
   const coords = missionPolygon.getLatLngs()[0].map(p => [p.lng, p.lat]);
   const polygon = turf.polygon([[...coords, coords[0]]]);
