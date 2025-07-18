@@ -176,64 +176,33 @@ function startMission() {
   map.on("click", addMissionPoint);
 }
 
-function finishMission() {
-  if (missionPoints.length < 3) {
-    alert("Musisz dodać co najmniej 3 punkty do misji.");
-    return;
-  }
-  missionMode = false;
-  map.off("click", addMissionPoint);
-
-  if (missionLine) {
-    map.removeLayer(missionLine);
-    missionLine = null;
-  }
-
-  missionPolygon = L.polygon(missionPoints, {
-    color: "gray",
-    fillColor: "lightgray",
-    fillOpacity: 0.3,
-  }).addTo(map);
-
-  document.getElementById("mission-info").textContent = "Obszar zaznaczony";
-}
 
 function addMissionPoint(e) {
+  if (!missionMode) return;
+
   const latlng = e.latlng;
   missionPoints.push(latlng);
 
-  const marker = L.circleMarker(latlng, {
-    radius: 6,
-    color: '#000',
-    fillColor: '#555',
-    fillOpacity: 0.7,
-    draggable: true
+  const marker = L.marker(latlng, {
+    draggable: true,
+    icon: L.divIcon({
+      className: 'mission-marker',
+      html: `<div style="width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #000;"></div>`,
+      iconSize: [12, 12],
+      iconAnchor: [6, 6]
+    })
   }).addTo(map);
 
-  marker.dragging = new L.Draggable(marker._path);
-  marker.dragging.enable();
-
   // Obsługa przeciągania
-  marker.on("mousedown", function (ev) {
-    ev.originalEvent.preventDefault(); // dla przeglądarek
-    const onMove = (ev) => {
-      const point = map.mouseEventToLatLng(ev);
-      marker.setLatLng(point);
-      const idx = missionMarkers.indexOf(marker);
-      if (idx !== -1) {
-        missionPoints[idx] = point;
-        updateMissionPolygon();
-      }
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+  marker.on("drag", function (ev) {
+    const idx = missionMarkers.indexOf(marker);
+    if (idx !== -1) {
+      missionPoints[idx] = ev.target.getLatLng();
+      updateMissionPolygon();
+    }
   });
 
-  // Usuwanie prawym kliknięciem
+  // Obsługa prawego kliknięcia (usuń punkt)
   marker.on("contextmenu", function () {
     const idx = missionMarkers.indexOf(marker);
     if (idx !== -1) {
@@ -246,7 +215,26 @@ function addMissionPoint(e) {
 
   missionMarkers.push(marker);
   updateMissionPolygon();
+
+  // Podczas dodawania punktów – wyłącz przycisk usuwania
+  document.getElementById("clear-mission-btn").disabled = true;
 }
+
+function finishMission() {
+  if (missionPoints.length < 3) {
+    alert("Musisz dodać co najmniej 3 punkty do misji.");
+    return;
+  }
+
+  missionMode = false;
+  map.off("click", addMissionPoint);
+
+  updateMissionPolygon();
+
+  document.getElementById("mission-info").textContent = "Obszar zaznaczony.";
+  document.getElementById("clear-mission-btn").disabled = false; // teraz można usunąć
+}
+
 
 function updateMissionPolygon() {
   if (missionPolygon) {
@@ -255,7 +243,7 @@ function updateMissionPolygon() {
   }
 
   if (missionPoints.length >= 3) {
-    missionPolygon = L.polygon(missionPoints.concat([missionPoints[0]]), {
+    missionPolygon = L.polygon([...missionPoints, missionPoints[0]], {
       color: "#999",
       weight: 2,
       fillColor: "#aaa",
@@ -263,11 +251,12 @@ function updateMissionPolygon() {
     }).addTo(map);
 
     const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
-    document.getElementById("mission-info").innerText = "\n Misja:\n" + coordList;
+    document.getElementById("mission-info").innerText = "Misja:\n" + coordList;
   } else {
-    document.getElementById("mission-info").innerText = "\n Dodaj co najmniej 3 punkty do misji.";
+    document.getElementById("mission-info").innerText = "Dodaj co najmniej 3 punkty do misji.";
   }
 }
+
 
 document.getElementById("clear-mission-btn").onclick = () => {
   if (confirm("Czy na pewno chcesz usunąć całą misję?")) {
@@ -283,5 +272,8 @@ function clearMission() {
     map.removeLayer(missionPolygon);
     missionPolygon = null;
   }
-  document.getElementById("mission-info").innerText = "Misja usunięta.";
+  missionMode = false;
+  document.getElementById("mission-info").textContent = "Misja usunięta.";
+  document.getElementById("clear-mission-btn").disabled = true;
 }
+
