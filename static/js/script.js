@@ -32,6 +32,7 @@ let missionMode = false; // tryb misji
 let missionPoints = [];
 let missionLine = null;
 let missionPolygon = null;
+let missionMarkers = []; // do przechowywania markerów misji
 
 /* ---------- persistence ---------- */
 function loadAccepted() {
@@ -198,47 +199,89 @@ function finishMission() {
 }
 
 function addMissionPoint(e) {
-  console.log("Kliknięto mapę:", e.latlng);
-
   const latlng = e.latlng;
-
-  // Dodaj punkt do listy
   missionPoints.push(latlng);
 
-  // Dodaj marker na mapie
   const marker = L.circleMarker(latlng, {
     radius: 6,
     color: '#000',
     fillColor: '#555',
-    fillOpacity: 0.7
+    fillOpacity: 0.7,
+    draggable: true
   }).addTo(map);
 
-  missionMarkers.push(marker);
+  marker.dragging = new L.Draggable(marker._path);
+  marker.dragging.enable();
 
-  // Jeśli >= 3 punkty, rysuj obszar
-  if (missionPoints.length >= 3) {
-  if (missionPolygon) {
-      missionPolygon.setLatLngs(missionPoints.concat([missionPoints[0]]));
-    } else {
-      missionPolygon = L.polygon(missionPoints.concat([missionPoints[0]]), {
-        color: "#999",
-        weight: 2,
-        fillColor: "#aaa",
-        fillOpacity: 0.3
-      }).addTo(map);
+  // Obsługa przeciągania
+  marker.on("mousedown", function (ev) {
+    ev.originalEvent.preventDefault(); // dla przeglądarek
+    const onMove = (ev) => {
+      const point = map.mouseEventToLatLng(ev);
+      marker.setLatLng(point);
+      const idx = missionMarkers.indexOf(marker);
+      if (idx !== -1) {
+        missionPoints[idx] = point;
+        updateMissionPolygon();
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+
+  // Usuwanie prawym kliknięciem
+  marker.on("contextmenu", function () {
+    const idx = missionMarkers.indexOf(marker);
+    if (idx !== -1) {
+      map.removeLayer(marker);
+      missionMarkers.splice(idx, 1);
+      missionPoints.splice(idx, 1);
+      updateMissionPolygon();
     }
+  });
 
-    // === Pokaż współrzędne ===
-    const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
+  missionMarkers.push(marker);
+  updateMissionPolygon();
+}
 
-    // Możesz wyświetlić w alert:
-    alert("Dodano misję. Punkty:\n" + coordList);
-
-    // Albo do konsoli:
-    console.log("Punkty misji:\n" + coordList);
-
-    // Albo do jakiegoś elementu na stronie:
-    document.getElementById("mission-info").innerText = "Misja:\n" + coordList;
+function updateMissionPolygon() {
+  if (missionPolygon) {
+    map.removeLayer(missionPolygon);
+    missionPolygon = null;
   }
 
+  if (missionPoints.length >= 3) {
+    missionPolygon = L.polygon(missionPoints.concat([missionPoints[0]]), {
+      color: "#999",
+      weight: 2,
+      fillColor: "#aaa",
+      fillOpacity: 0.3
+    }).addTo(map);
+
+    const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
+    document.getElementById("mission-info").innerText = "\n Misja:\n" + coordList;
+  } else {
+    document.getElementById("mission-info").innerText = "\n Dodaj co najmniej 3 punkty do misji.";
+  }
+}
+
+document.getElementById("clear-mission-btn").onclick = () => {
+  if (confirm("Czy na pewno chcesz usunąć całą misję?")) {
+    clearMission();
+  }
+};
+
+function clearMission() {
+  missionPoints = [];
+  missionMarkers.forEach(m => map.removeLayer(m));
+  missionMarkers = [];
+  if (missionPolygon) {
+    map.removeLayer(missionPolygon);
+    missionPolygon = null;
+  }
+  document.getElementById("mission-info").innerText = "Misja usunięta.";
 }
