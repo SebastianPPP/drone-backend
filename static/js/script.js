@@ -355,50 +355,75 @@ function loadMission() {
 
 /* ---------- generowanie tras ---------- */
 
-function generateFlightPath(stepMeters = 50) {
+function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50) {
   if (!missionPolygon) return;
 
+  // 🧽 Usuń stare trasy
   if (window.flightLines) {
     window.flightLines.forEach(l => map.removeLayer(l));
   }
   window.flightLines = [];
 
   const coords = missionPolygon.getLatLngs()[0].map(p => [p.lng, p.lat]);
-  const polygon = turf.polygon([[...coords, coords[0]]]);
-
+  const polygon = turf.polygon([[...coords, coords[0]]]); // zamknięty ring
   const bbox = turf.bbox(polygon);
-  const lines = [];
-  const step = stepMeters / 111320; // approx meters to degrees
-  let y = bbox[1];
+  const stepDeg = stepMeters / 111320;
+
+  const centerY = (bbox[1] + bbox[3]) / 2;
+  const width = bbox[2] - bbox[0];
+
+  let y = bbox[1] + stepDeg / 2;
+  const linesInside = [];
   let toggle = false;
 
   while (y <= bbox[3]) {
-    const p1 = [bbox[0], y];
-    const p2 = [bbox[2], y];
-    const line = turf.lineString([p1, p2]);
-    const clipped = turf.lineIntersect(line, polygon);
+    const fullLine = turf.lineString([[bbox[0] - width, y], [bbox[2] + width, y]]);
+    const clipped = turf.lineIntersect(fullLine, polygon);
 
     if (clipped.features.length >= 2) {
-      const sorted = clipped.features
-        .map(f => f.geometry.coordinates)
-        .sort((a, b) => a[0] - b[0]);
+      const pts = clipped.features.map(f => f.geometry.coordinates);
+      pts.sort((a, b) => a[0] - b[0]); // sortuj po długości geograficznej
 
-      if (toggle) sorted.reverse();
-      lines.push(...sorted);
+      const inside = toggle ? [pts[1], pts[0]] : [pts[0], pts[1]];
+      linesInside.push(inside);
       toggle = !toggle;
     }
 
-    y += step;
+    y += stepDeg;
   }
 
-  if (lines.length < 2) return;
+  if (linesInside.length < 1) {
+    alert("Nie udało się wygenerować trasy – upewnij się, że obszar nie jest zbyt mały.");
+    return;
+  }
 
-  if (window.flightLine) map.removeLayer(window.flightLine);
-  window.flightLine = L.polyline(lines.map(c => [c[1], c[0]]), {
-    color: 'blue',
-    weight: 2
-  }).addTo(map);
+  // 🔁 Zawrotki: dodajemy tam i z powrotem
+  const flightPath = [];
+  for (let i = 0; i < linesInside.length; i++) {
+    flightPath.push(linesInside[i][0]);
+    flightPath.push(linesInside[i][1]);
+  }
 
-  const total = turf.length(turf.lineString(lines), { units: 'kilometers' }).toFixed(2);
-  document.getElementById("mission-info").textContent += `\nDługość trasy: ${total} km`;
+  // 🔀 Rozdziel ścieżkę między drony
+  const totalPoints = flightPath.length;
+  const pointsPerDrone = Math.ceil(totalPoints / numDrones);
+  const colors = ["red", "green", "blue", "orange", "purple", "brown"];
+
+  for (let d = 0; d < numDrones; d++) {
+    const startIdx = d * pointsPerDrone;
+    const endIdx = Math.min(startIdx + pointsPerDrone, totalPoints);
+    const path = flightPath.slice(startIdx, endIdx);
+
+    if (path.length < 2) continue;
+
+    const polyline = L.polyline(path.map(c => [c[1], c[0]]), {
+      color: colors[d % colors.length],
+      weight: 2
+    }).addTo(map);
+
+    window.flightLines.push(polyline);
+  }
+
+  const totalKm = turf.length(turf.lineString(flightPath), { units: 'kilometers' }).toFixed(2);
+  document.getElementById("mission-info").textContent += `\nTrasa dla ${numDrones} dronów, łączna długość: ${totalKm} km`;
 }
