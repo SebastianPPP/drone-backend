@@ -39,3 +39,22 @@ body{margin:0;font-family:sans-serif;display:flex;height:100vh}
 }
 #mission-btn:hover{filter:brightness(.9);}
 #mission-info{color:#1565c0;font-size:.85rem;margin-left:6px;}
+
+.mission-status {
+  font-size: 0.85em;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.hidden {
+  display: none;
+}
+
+#mission-panel {
+  border: 1px solid #ccc;
+  padding: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #f9f9f9;
+  margin-top: 10px;
+}
