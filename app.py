@@ -67,7 +67,9 @@ def telemetry():
         drone_id = data.get("drone_id")
         lat = data.get("lat")
         lon = data.get("lon")
-
+        battery = data.get("battery")  # <--- NOWE
+        alt = data.get("alt")
+        
         if not drone_id or lat is None or lon is None:
             return jsonify({"error": "Brak danych telemetrycznych"}), 400
 
@@ -75,6 +77,8 @@ def telemetry():
             "drone_id": drone_id,
             "lat": lat,
             "lon": lon,
+            "alt": alt,
+            "battery": battery,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "timestamp_unix": time.time()
         }
