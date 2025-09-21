@@ -17,7 +17,7 @@ status_by_drone = {}     # drone_id -> mission status
 @app.route("/api/mission/upload", methods=["POST"])
 def upload_mission():
     data = request.get_json()
-    drones = data.get("drones", [])
+    drones = data.get("drones", {})  # teraz oczekujemy słownika
 
     if not drones:
         return jsonify({"error": "Brak danych misji"}), 400
@@ -28,7 +28,7 @@ def upload_mission():
         if time.time() - t.get("timestamp_unix", 0) < 15
     }
 
-    requested_drones = {d["droneId"] for d in drones}
+    requested_drones = set(drones.keys())
     missing_drones = requested_drones - active_drones
 
     if missing_drones:
@@ -39,12 +39,12 @@ def upload_mission():
         }), 400
 
     # Zapisz misje dla każdego drona
-    for d in drones:
-        drone_id = d["droneId"]
-        mission_by_drone[drone_id] = d["path"]
+    for drone_id, path in drones.items():
+        mission_by_drone[drone_id] = path
         status_by_drone[drone_id] = "assigned"
 
     return jsonify({"status": "ok", "assigned": list(requested_drones)})
+
 
 @app.route("/api/mission/status", methods=["POST"])
 def mission_status_update():
@@ -57,6 +57,20 @@ def mission_status_update():
 
     status_by_drone[drone_id] = status
     return jsonify({"status": "updated"}), 200
+
+
+@app.route("/api/mission/current", methods=["GET"])
+def get_current_missions():
+    missions_latlng = {}
+    for drone_id, path in mission_by_drone.items():
+        # path: lista [lon, lat] → konwertujemy na [lat, lon] dla Leaflet
+        missions_latlng[drone_id] = [[lat, lon] for lat, lon in path]
+        if status_by_drone.get(drone_id) == "assigned":
+            status_by_drone[drone_id] = "Wykonywana"
+    return jsonify(missions_latlng)
+
+
+
 
 @app.route("/api/telemetry", methods=["GET", "POST"])
 def telemetry():
