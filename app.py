@@ -3,6 +3,18 @@ from datetime import datetime
 import time
 from flask import render_template
 
+#TO DO:
+# Kwestia front endu
+# 1) kolor zmienić na #1322E6
+# (!) 2) rozwijanie drona aktywnego i podpatrzenie jego parametrów (bateria, położenie status misji itp)
+# Do zwrócenia uwaga że dane przesyłane z mavlink mogą mieć opóźnienie w postaci np 0.8sek
+# 3) 
+# Kwestia funkcjonalności:
+# 1) end pointy na telemetrie i misje
+# 2) 
+
+
+
 app = Flask(__name__)
 
 @app.route("/")
