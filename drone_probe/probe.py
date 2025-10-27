@@ -182,10 +182,10 @@ def run(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Symulator telemetrii drona → POST /api/telemetry")
-    p.add_argument("--server", default="http://localhost:5000", help="URL serwera Flask")
-    p.add_argument("--drone-id", required=True, help="Identyfikator drona")
+    p.add_argument("--server", default="http://127.0.0.1:5000", help="URL serwera Flask")
+    p.add_argument("--drone-id", required=False, help="Identyfikator drona")
     src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--csv", help="Plik CSV z kolumnami lon,lat[,alt]")
+    src.add_argument("--csv", help="Plik CSV z kolumnami lon,lat,alt")
     src.add_argument("--waypoints", help="Punkty inline 'lon,lat;lon,lat[;...]'")
     src.add_argument("--random-walk", nargs=2, type=float, metavar=("LAT", "LON"), help="Losowy spacer wokół LAT LON")
     p.add_argument("--alt", type=float, default=120.0, help="Domyślna wysokość, gdy brak w danych (m)")

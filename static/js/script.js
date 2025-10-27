@@ -177,17 +177,41 @@ function updateMarkers(data) {
   data.forEach(rec => {
     const id = norm(rec.drone_id);
     const pos = [rec.lat, rec.lon];
+
+    // Zapamiętujemy czas ostatniego sygnału
     lastSeen[id] = Date.parse(rec.timestamp.split(".")[0] + "Z");
+
     const st = statusOf(id);
     let icon = id === selected ? ICON.selected :
-               st === "active"   ? ICON.active   :
+               st === "active"   ? ICON.active :
                st === "inactive" ? ICON.inactive :
                                    ICON.detected;
+
+    // 🆕 Zawartość popupu z parametrami drona
+    const popupHtml = `
+      <b>Dron: ${id}</b><br>
+      🛰 Lat: ${rec.lat.toFixed(6)}<br>
+      📍 Lon: ${rec.lon.toFixed(6)}<br>
+      📡 Wysokość: ${rec.alt ?? "-"} m<br>
+      🔋 Bateria: ${rec.battery ?? "-"}%<br>
+      ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
+      📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
+    `;
+
     if (!markers[id]) {
-      markers[id] = L.marker(pos, { icon }).addTo(map).bindPopup(id)
-        .on("click", () => { selected = id; refresh(); });
+      markers[id] = L.marker(pos, { icon })
+        .addTo(map)
+        .bindPopup(popupHtml)
+        .on("click", () => {
+          selected = id;
+          markers[id].openPopup();
+          refresh(); // odśwież ikonę aktywnego
+        });
     } else {
-      markers[id].setLatLng(pos).setIcon(icon);
+      markers[id]
+        .setLatLng(pos)
+        .setIcon(icon)
+        .bindPopup(popupHtml);
     }
   });
 }
