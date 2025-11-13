@@ -13,14 +13,17 @@
 
   <style>
     *{box-sizing:border-box}
-    body{margin:0;font-family:sans-serif;display:flex;height:100vh}
-    #sidebar{width:250px;background:#f4f4f4;border-right:1px solid #ccc;padding:10px;overflow-y:auto}
-    #sidebar h3{margin:6px 0 4px;font-size:.95rem}
-    .item{padding:6px 8px;border-radius:4px;cursor:pointer;margin-bottom:4px}
-    .item:hover{background:#e0e0e0}
-    .item.active{background:#1b5e20;color:#fff;font-weight:600}
-    .item.offline{background:#b71c1c;color:#fff}
-    .btn-acc{float:right;font-size:.75rem;background:#2196f3;color:#fff;border:none;border-radius:3px;padding:2px 6px;cursor:pointer}
+    body{margin:0;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;display:flex;height:100vh;background:#2a2a2a}
+    #sidebar{width:280px;background:#ffffff;border-right:2px solid #1322E6;padding:15px;overflow-y:auto;box-shadow:2px 0 8px rgba(19,34,230,0.3)}
+    #sidebar h3{margin:12px 0 8px;font-size:1rem;color:#1322E6;border-bottom:2px solid #1322E6;padding-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+    .item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:6px;border-left:4px solid transparent;transition:all 0.2s;color:#e0e0e0}
+    .item:hover{background:rgba(19, 33, 230, 0.274);transform:translateX(4px)}
+    .item.active{background:rgba(19,34,230,0.25);border-left-color:#1322E6;color:#1322E6;font-weight:bold}
+    .item.inactive{background:rgba(198,40,40,0.2);border-left-color:#c62828;color:#ff6b6b}
+    .item.detected{background:rgba(100,100,100,0.219);border-left-color:#757575;color:#b0b0b0}
+    .item.selected.active{background:rgba(46,125,50,0.4);border-left-color:#4caf50;outline:2px solid #4caf50;color:#4caf50;box-shadow:0 0 12px rgba(76,175,80,0.6)}
+    .item.selected.inactive{background:rgba(244,67,54,0.4);border-left-color:#f44336;outline:2px solid #f44336;color:#ff5252;box-shadow:0 0 12px rgba(244,67,54,0.6)}
+    .item.selected.detected{background:rgba(158,158,158,0.4);border-left-color:#9e9e9e;outline:2px solid #9e9e9e;color:#bdbdbd;box-shadow:0 0 12px rgba(158,158,158,0.6)}
     #map{flex:1}
   </style>
 </head>
@@ -37,11 +40,10 @@
     <div id="detected-list"><em>Brak</em></div>
 
     <div class="sidebar-control">
-      <button id="mission-btn">➕ Nowa misja</button>
+      <button id="mission-btn">➕ Nowa misja</button>
       <span id="mission-info"></span>
-      <button id="clear-mission-btn">Usuń misję</button>
-
-      <button id="generate-path-btn">Generuj trasę</button>
+      <button id="clear-mission-btn" disabled>🗑️ Usuń misję</button>
+      <button id="generate-path-btn">🛫 Generuj trasę</button>
     </div>
   </div>
 

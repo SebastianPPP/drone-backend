@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-rem === Run from this script's directory ===
+rem === Run from this script directory ===
 cd /d "%~dp0"
 
 rem --------- DOMYŚLNE USTAWIENIA (możesz zmienić) ----------

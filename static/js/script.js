@@ -29,6 +29,7 @@ let selected = null;
 let lastSeen = {};          // id → epoch ms
 let markers  = {};          // id → L.marker
 let map;
+let followSelected = false; // czy kamera ma podążać za wybranym dronem
 let missionMode = false; // tryb misji 
 let missionPoints = [];
 let missionLine = null;
@@ -64,6 +65,10 @@ function statusOf(id) {
 function initMap() {
   map = L.map("map").setView([52.1, 19.3], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OSM" }).addTo(map);
+  // Jeśli użytkownik zacznie ręcznie przesuwać mapę, wyłącz automatyczne śledzenie
+  map.on('dragstart zoomstart movestart', () => {
+    followSelected = false;
+  });
 }
 
 document.getElementById("mission-btn").onclick = () => {
@@ -100,39 +105,29 @@ function render(ids) {
     const row = document.createElement("div");
     row.className = `item ${cls}${id === selected ? " selected" : ""}`;
 
-    // Tworzymy klikany label (tylko on otwiera menu)
+    // Tworzymy klikany label (który będzie otwierać drona na mapie)
     const label = document.createElement("div");
     label.textContent = id;
     label.style.cursor = "pointer";
     label.style.fontWeight = "bold";
+    label.style.flex = "1";
 
-    // Element info o misji - ukryty lub widoczny według pamięci
-    const missionInfo = document.createElement("div");
-    missionInfo.className = "mission-info";
-    missionInfo.style.display = expandedMissions.has(id) ? "block" : "none";
-
-    // Zamiast statusu obok nazwy, dajemy np. mały symbol (lub go usuwamy)
-    // Usuwam statusLabel - albo możesz zrobić ikonę
-
-    missionInfo.innerHTML = `<small>Informacje o misji drona ${id}:</small><br>Cel: Monitorowanie<br>Status: ${missionStatuses[id] || "Brak misji"}`;
-
-    // Kliknięcie w label toggluje menu i zapisuje stan
+    // Kliknięcie w label otwiera drona, włącza śledzenie i pokazuje popup
     label.onclick = e => {
       e.stopPropagation();
-      if (missionInfo.style.display === "block") {
-        missionInfo.style.display = "none";
-        expandedMissions.delete(id);
-      } else {
-        missionInfo.style.display = "block";
-        expandedMissions.add(id);
+      selected = id;
+      followSelected = true; // przy zaznaczeniu uruchom śledzenie
+      if (markers[id]) {
+        map.setView(markers[id].getLatLng(), map.getZoom());
+        markers[id].openPopup();
       }
-      saveExpandedMissions();
+      refresh(); // Odśwież UI - podświetli drona
     };
 
     row.appendChild(label);
-    row.appendChild(missionInfo);
 
     const b = document.createElement("button");
+    b.className = "btn-action";
     b.textContent = btnTxt;
     b.onclick = e => { 
       e.stopPropagation(); 
@@ -187,23 +182,28 @@ function updateMarkers(data) {
                st === "inactive" ? ICON.inactive :
                                    ICON.detected;
 
-    // 🆕 Zawartość popupu z parametrami drona
+    // Zawartość popupu z parametrami drona
     const popupHtml = `
-      <b>Dron: ${id}</b><br>
-      🛰 Lat: ${rec.lat.toFixed(6)}<br>
-      📍 Lon: ${rec.lon.toFixed(6)}<br>
-      📡 Wysokość: ${rec.alt ?? "-"} m<br>
-      🔋 Bateria: ${rec.battery ?? "-"}%<br>
-      ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
-      📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
+      <div style="width:100%; box-sizing:border-box;">
+        <b style="color:#ffffff; font-size:14px; display:block; margin-bottom:8px; text-align:center;">🛸 Dron: ${id}</b>
+        <div style="border-top:1px solid rgba(19,34,230,0.4); margin:8px 0; padding-top:8px; font-size:13px;">
+          <div style="color:#e0e0e0; margin:5px 0;">🛰 <strong>Lat:</strong> ${rec.lat.toFixed(6)}</div>
+          <div style="color:#e0e0e0; margin:5px 0;">📍 <strong>Lon:</strong> ${rec.lon.toFixed(6)}</div>
+          <div style="color:#e0e0e0; margin:5px 0;">📡 <strong>Wysokość:</strong> ${rec.alt ?? "-"} m</div>
+          <div style="color:#4caf50; margin:5px 0; font-weight:bold;">🔋 <strong>Bateria:</strong> ${rec.battery ?? "-"}%</div>
+          <div style="color:#e0e0e0; margin:5px 0;">↪️ <strong>Kurs:</strong> ${rec.yaw ?? "-"}°</div>
+          <div style="color:#e0e0e0; margin:5px 0;">📅 <strong>Czas:</strong> ${new Date(rec.timestamp).toLocaleTimeString()}</div>
+        </div>
+      </div>
     `;
 
     if (!markers[id]) {
       markers[id] = L.marker(pos, { icon })
         .addTo(map)
-        .bindPopup(popupHtml)
+        .bindPopup(popupHtml, { maxWidth: 250 })
         .on("click", () => {
           selected = id;
+          followSelected = true; // przy kliknięciu markera też śledzimy
           markers[id].openPopup();
           refresh(); // odśwież ikonę aktywnego
         });
@@ -211,7 +211,20 @@ function updateMarkers(data) {
       markers[id]
         .setLatLng(pos)
         .setIcon(icon)
-        .bindPopup(popupHtml);
+        .bindPopup(popupHtml, { maxWidth: 250 });
+      
+      // Jeśli dron jest wybrany i włączone śledzenie, przesuwaj mapę za nim
+      if (id === selected) {
+        markers[id].openPopup();
+        if (followSelected && map) {
+          try {
+            map.panTo(markers[id].getLatLng(), { animate: true, duration: 0.5 });
+          } catch (e) {
+            // fallback
+            map.setView(markers[id].getLatLng(), map.getZoom());
+          }
+        }
+      }
     }
   });
 }
@@ -242,13 +255,48 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(refresh, 3000);
   loadMission();
   document.getElementById("generate-path-btn").onclick = () => {
-    const n = parseInt(prompt("Ile dronów?", "3"), 10);
-    if (isNaN(n) || n < 1) return;
+    // Używamy wszystkich zaakceptowanych dronów (nawet jeśli chwilowo nie wysyłają telemetrii)
+    const acceptedDronesList = [...accepted].sort();
+
+    if (acceptedDronesList.length === 0) {
+      alert("❌ Brak zaakceptowanych dronów! Najpierw zaakceptuj co najmniej jeden dron.");
+      return;
+    }
+
+    // Pokaż status (ostatnie widziane) dla zaakceptowanych dronów
+    const droneStatuses = acceptedDronesList.map(id => {
+      const age = Date.now() - (lastSeen[id] || 0);
+      const status = age <= 10000 ? "✅ AKTYWNY" : "⏱️ NIEAKTYWNY";
+      return `${id} ${status}`;
+    }).join("\n");
+
+    alert(`✅ Znaleziono ${acceptedDronesList.length} zaakceptowanych dronów:\n\n${droneStatuses}`);
+
+    // Zapytaj o typ algorytmu
+    const algorithmChoice = prompt(
+      "Wybierz typ tworzenia trasy:\n\n1 - Lawnmower (równoległy scan)\n2 - D-Star Lite (dynamiczne planowanie)\n3 - VFH (Vector Field Histogram)\n\nWpisz 1, 2 lub 3:",
+      "1"
+    );
+
+    if (!algorithmChoice || !["1", "2", "3"].includes(algorithmChoice)) {
+      alert("❌ Nieprawidłowy wybór algorytmu!");
+      return;
+    }
+
+    const n = parseInt(prompt("Ile dronów użyć?", Math.min(3, acceptedDronesList.length)), 10);
+    if (isNaN(n) || n < 1 || n > acceptedDronesList.length) {
+      alert("❌ Nieprawidłowa liczba dronów!");
+      return;
+    }
 
     const s = parseFloat(prompt("Podaj krok (w metrach) — np. 50", "50"));
-    if (isNaN(s) || s <= 0) return;
+    if (isNaN(s) || s <= 0) {
+      alert("❌ Nieprawidłowy krok!");
+      return;
+    }
 
-    generateFlightPathsForDrones(n, s);
+    const algorithmNames = { "1": "Lawnmower", "2": "D-Star Lite", "3": "VFH" };
+    generateFlightPathsForDrones(n, s, algorithmChoice, algorithmNames[algorithmChoice]);
   };
 
 });
@@ -340,10 +388,10 @@ function updateMissionPolygon() {
 
   if (missionPoints.length >= 3) {
     missionPolygon = L.polygon([...missionPoints, missionPoints[0]], {
-      color: "#999",
-      weight: 2,
-      fillColor: "#aaa",
-      fillOpacity: 0.3
+      color: "#1322E6",
+      weight: 3,
+      fillColor: "#1322E6",
+      fillOpacity: 0.15
     }).addTo(map);
 
     const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
@@ -437,18 +485,18 @@ function loadMission() {
 
 /* ---------- generowanie tras ---------- */
 
-function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50) {
+function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50, algorithm = "1", algorithmName = "Lawnmower") {
   if (!missionPolygon) {
     alert("Najpierw zaznacz obszar misji.");
     return;
   }
 
-  // Pobierz aktywne drony (w kolejności alfabetycznej)
-  const activeDrones = [...accepted].filter(id => statusOf(id) === "active");
+  // Używamy zaakceptowanych dronów (nie filtrujemy po ostatnim widzeniu)
+  const activeDrones = [...accepted];
   activeDrones.sort();
 
   if (activeDrones.length < numDrones) {
-    alert(`Liczba aktywnych dronów (${activeDrones.length}) jest mniejsza niż wymagana (${numDrones}). Nie wysyłam tras.`);
+    alert(`Liczba dostępnych (zaakceptowanych) dronów (${activeDrones.length}) jest mniejsza niż wymagana (${numDrones}). Nie wysyłam tras.`);
     return;
   }
 
@@ -527,7 +575,8 @@ function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50) {
   }
 
   const totalKm = turf.length(turf.lineString(flightPath), { units: 'kilometers' }).toFixed(2);
-  document.getElementById("mission-info").textContent += `\nTrasa dla ${numDrones} dronów, łączna długość: ${totalKm} km`;
+  const infoText = `📍 Algorytm: ${algorithmName}\n🛸 Drony (${numDrones}): ${activeDrones.slice(0, numDrones).join(", ")}\n📏 Krok: ${stepMeters}m\n📊 Długość: ${totalKm} km`;
+  document.getElementById("mission-info").textContent = infoText;
 
   // Wysyłamy tylko, jeśli mamy trasy do wysłania
   if (Object.keys(allDronePaths).length > 0) {
@@ -541,9 +590,11 @@ function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50) {
       .then(res => res.json())
       .then(data => {
         console.log("✅ Misja wysłana:", data);
+        document.getElementById("mission-info").textContent += "\n✅ Trasy wysłane do dronów!";
       })
       .catch(err => {
         console.error("❌ Błąd podczas wysyłania misji:", err);
+        document.getElementById("mission-info").textContent += "\n❌ Błąd wysyłania tras!";
       });
   }
 }
