@@ -112,16 +112,27 @@ function render(ids) {
     label.style.fontWeight = "bold";
     label.style.flex = "1";
 
-    // Kliknięcie w label otwiera drona, włącza śledzenie i pokazuje popup
+    // Kliknięcie w nazwę drona rozwija info i przybliża na mapie
     label.onclick = e => {
       e.stopPropagation();
+
+      // przełącz rozwinięcie info o misji
+      if (missionInfo.style.display === "block") {
+        missionInfo.style.display = "none";
+        expandedMissions.delete(id);
+      } else {
+        missionInfo.style.display = "block";
+        expandedMissions.add(id);
+      }
+      saveExpandedMissions();
+
+      // 🔍 dodatkowo: przybliż na drona, jeśli ma marker
       selected = id;
-      followSelected = true; // przy zaznaczeniu uruchom śledzenie
       if (markers[id]) {
-        map.setView(markers[id].getLatLng(), map.getZoom());
+        const ll = markers[id].getLatLng();
+        map.flyTo(ll, Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
         markers[id].openPopup();
       }
-      refresh(); // Odśwież UI - podświetli drona
     };
 
     row.appendChild(label);
@@ -200,31 +211,37 @@ function updateMarkers(data) {
     if (!markers[id]) {
       markers[id] = L.marker(pos, { icon })
         .addTo(map)
-        .bindPopup(popupHtml, { maxWidth: 250 })
+        .bindPopup(`
+          <b>Dron: ${id}</b><br>
+          🛰 Lat: ${rec.lat.toFixed(6)}<br>
+          📍 Lon: ${rec.lon.toFixed(6)}<br>
+          📡 Wysokość: ${rec.alt ?? "-"} m<br>
+          🔋 Bateria: ${rec.battery ?? "-"}%<br>
+          ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
+          📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
+        `)
         .on("click", () => {
           selected = id;
-          followSelected = true; // przy kliknięciu markera też śledzimy
+          followSelected = true; // włącz śledzenie po kliknięciu
+          // 🔍 przybliż na drona
+          const ll = markers[id].getLatLng();
+          map.flyTo(ll, Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
           markers[id].openPopup();
-          refresh(); // odśwież ikonę aktywnego
+          refresh();
         });
     } else {
       markers[id]
         .setLatLng(pos)
         .setIcon(icon)
-        .bindPopup(popupHtml, { maxWidth: 250 });
-      
-      // Jeśli dron jest wybrany i włączone śledzenie, przesuwaj mapę za nim
-      if (id === selected) {
-        markers[id].openPopup();
-        if (followSelected && map) {
-          try {
-            map.panTo(markers[id].getLatLng(), { animate: true, duration: 0.5 });
-          } catch (e) {
-            // fallback
-            map.setView(markers[id].getLatLng(), map.getZoom());
-          }
-        }
-      }
+        .bindPopup(`
+          <b>Dron: ${id}</b><br>
+          🛰 Lat: ${rec.lat.toFixed(6)}<br>
+          📍 Lon: ${rec.lon.toFixed(6)}<br>
+          📡 Wysokość: ${rec.alt ?? "-"} m<br>
+          🔋 Bateria: ${rec.battery ?? "-"}%<br>
+          ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
+          📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
+        `);
     }
   });
 }
