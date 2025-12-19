@@ -90,23 +90,31 @@ trajectory = []   # lista punktów trajektorii
 # =========================
 # AUTOPILOT SETTINGS
 # =========================
-BASE_SPEED = 5.0          # base speed
+# PODSTA
+BASE_SPEED = 6.0          # base speed
 TURN_GAIN = 2.5           # steering P gain
 MAX_SPEED = 9.0           # motor saturation
 SLOW_DIST = 3.0           # slow down when closer than this
 STOP_DIST = 0.8           # considered arrived within this radius
 
 # Avoid / Escape thresholds
-OBSTACLE_DIST = 3.8       # earlier trigger helps with big obstacle
-ESCAPE_TRIGGER = 1.2       # "contact/too close" threshold (consistent - not overwritten)
+OBSTACLE_DIST = 4.0       # earlier trigger helps with big obstacle
+ESCAPE_TRIGGER = 0.8       # "contact/too close" threshold (consistent - not overwritten)
 
 # Stronger avoid behavior (your issue: too weak)
 AVOID_HOLD_TIME = 4.0
 AVOID_BASE_SPEED = 4.0     # slower in avoid => more time to turn before hitting
 AVOID_TURN = 4.0           # stronger fixed turn than 1.5
 
+# --- AVOID (pivot-arc) --- to jest tylko po to żeby mocno ominąć przeszkodę
+AVOID_INNER_REV = 2.0      # inner wheel reverse speed magnitude (e.g. -2)
+AVOID_OUTER_FWD = 4.0      # outer wheel forward speed (e.g. +4)
+
+# Debounce pare razy rzeczy, żeby wyjść z AVOID
+AVOID_CLEAR_STEPS = 8   
+
 # Escape behavior
-ESCAPE_TIME = 1.2
+ESCAPE_TIME = 6.0          # how long to back away
 ESCAPE_BACK = -3.5
 ESCAPE_SPIN = 3.2          # slightly stronger spin
 
@@ -120,7 +128,7 @@ MAX_RECOVER_TURN = 1.6
 # =========================
 # PRINT TIMER
 # =========================
-PRINT_INTERVAL = 0.5
+PRINT_INTERVAL = 0.05
 time_acc = 0.0
 
 # =========================
@@ -131,7 +139,10 @@ AVOID_SIDE = None       # "LEFT" or "RIGHT"
 AVOID_HOLD = 0.0
 ESCAPE_HOLD = 0.0
 RECOVER_HOLD = 0.0
-LAST_AVOID_SIDE = None
+AVOID_CLEAR_STREAK = 0
+LAST_AVOID_SIDE = None       # "LEFT" / "RIGHT"
+AVOID_SIDE_LOCK = 0.0        # sekundy blokady (opcjonalnie, ale bardzo pomaga)
+SIDE_LOCK_TIME = 3.0         # ile sekund trzymamy stronę po wyborze
 
 # =============================
 # HELPERS
@@ -187,7 +198,12 @@ def autopilot_step(
     target_pos,
     dt
 ):
-    global AP_MODE, AVOID_SIDE, AVOID_HOLD, ESCAPE_HOLD, RECOVER_HOLD
+    global AP_MODE, AVOID_SIDE, AVOID_HOLD, ESCAPE_HOLD, RECOVER_HOLD, AVOID_CLEAR_STREAK
+    global LAST_AVOID_SIDE, AVOID_SIDE_LOCK
+
+    if AVOID_SIDE_LOCK > 0.0:
+        AVOID_SIDE_LOCK -= dt
+
 
     # --- wymagane minimum ---
     if not gps:
@@ -237,25 +253,59 @@ def autopilot_step(
         if n > 10:
             mid = n // 2
 
-            front_w = max(5, int(0.10 * n))   # slightly wider
-            right_a = int(0.28 * n)
-            right_b = int(0.46 * n)
-            left_a  = int(0.54 * n)
-            left_b  = int(0.72 * n)
+            # Helper: treat inf/NaN as invalid so they don't dominate mins
+            def finite_min(seq):
+                vals = [v for v in seq if (v is not None) and (not math.isinf(v)) and (not math.isnan(v))]
+                return min(vals) if vals else float("inf")
 
-            front_sector = ranges[mid - front_w: mid + front_w + 1]
-            left_sector  = ranges[left_a:left_b]
+            # --- FRONT sector (center of scan) ---
+            front_w = max(5, int(0.10 * n))  # width of front window
+            front_sector = ranges[max(0, mid - front_w): min(n, mid + front_w + 1)]
+            front_min = finite_min(front_sector)
+
+            # --- SIDE sectors ---
+            # Your scan ordering appears reversed vs earlier assumption:
+            # ranges[0] ... ranges[mid] ... ranges[n-1]
+            # LEFT is near index 0, RIGHT is near index n-1
+            left_a = int(0.28 * n)
+            left_b = int(0.46 * n)
+            right_a = int(0.54 * n)
+            right_b = int(0.72 * n)
+
+            left_sector = ranges[left_a:left_b]
             right_sector = ranges[right_a:right_b]
 
-            front_min = min(front_sector) if front_sector else float("inf")
-            left_min  = min(left_sector) if left_sector else float("inf")
-            right_min = min(right_sector) if right_sector else float("inf")
+            left_min = finite_min(left_sector)
+            right_min = finite_min(right_sector)
 
+            # --- EDGE sectors (extremes of scan) ---
             edge_w = max(3, int(EDGE_W_FRAC * n))
-            right_edge_min = min(ranges[0:edge_w]) if edge_w > 0 else float("inf")
-            left_edge_min = min(ranges[n-edge_w:n]) if edge_w > 0 else float("inf")
 
-    
+            left_edge_sector = ranges[0:edge_w]
+            right_edge_sector = ranges[n - edge_w:n]
+
+            left_edge_min = finite_min(left_edge_sector)
+            right_edge_min = finite_min(right_edge_sector)
+
+
+            # front_w = max(5, int(0.10 * n))   # slightly wider
+            # right_a = int(0.28 * n)
+            # right_b = int(0.46 * n)
+            # left_a  = int(0.54 * n)
+            # left_b  = int(0.72 * n)
+
+            # front_sector = ranges[mid - front_w: mid + front_w + 1]
+            # left_sector  = ranges[left_a:left_b]
+            # right_sector = ranges[right_a:right_b]
+
+            # front_min = min(front_sector) if front_sector else float("inf")
+            # left_min  = min(left_sector) if left_sector else float("inf")
+            # right_min = min(right_sector) if right_sector else float("inf")
+
+            # edge_w = max(3, int(EDGE_W_FRAC * n))
+            # right_edge_min = min(ranges[0:edge_w]) if edge_w > 0 else float("inf")
+            # left_edge_min = min(ranges[n-edge_w:n]) if edge_w > 0 else float("inf")
+
     # =========================
     # STATE MACHINE
     # =========================
@@ -265,7 +315,13 @@ def autopilot_step(
         AP_MODE = "ESCAPE"
         if ESCAPE_HOLD <= 0.0:
             ESCAPE_HOLD = ESCAPE_TIME
-            AVOID_SIDE = "LEFT" if left_min > right_min else "RIGHT"
+            # Keep the latched side if available; only choose if we don't have one
+            if LAST_AVOID_SIDE is not None and AVOID_SIDE_LOCK > 0.0:
+                AVOID_SIDE = LAST_AVOID_SIDE
+            else:
+                AVOID_SIDE = "LEFT" if left_min > right_min else "RIGHT"
+                LAST_AVOID_SIDE = AVOID_SIDE
+                AVOID_SIDE_LOCK = SIDE_LOCK_TIME
 
     if AP_MODE == "ESCAPE":
         ESCAPE_HOLD -= dt
@@ -297,51 +353,64 @@ def autopilot_step(
         }
 
     # 2) Trigger AVOID when obstacle seen in front
-    if front_min < OBSTACLE_DIST:
+    # Ma wejść do AVOID jeśli:
+    # - front_min < OBSTACLE_DIST
+    # - lub jeśli jesteśmy blisko krawędzi (edge_w)
+
+    if front_min < OBSTACLE_DIST or (left_edge_min < OBSTACLE_DIST) or (right_edge_min < OBSTACLE_DIST):
         if AP_MODE != "AVOID":
             AP_MODE = "AVOID"
-            AVOID_HOLD = AVOID_HOLD_TIME
-            AVOID_SIDE = "LEFT" if left_min > right_min else "RIGHT"
+
+            # If we already have a latched side and lock is active, keep it
+            if LAST_AVOID_SIDE is not None and AVOID_SIDE_LOCK > 0.0:
+                AVOID_SIDE = LAST_AVOID_SIDE
+            else:
+                # Choose once, then latch
+                AVOID_SIDE = "LEFT" if left_min > right_min else "RIGHT"
+                LAST_AVOID_SIDE = AVOID_SIDE
+                AVOID_SIDE_LOCK = SIDE_LOCK_TIME
 
     # 3) AVOID behavior (STRONGER + SLOWER)
     if AP_MODE == "AVOID":
-        AVOID_HOLD -= dt
 
-        # stronger: keep low forward speed, strong turn
-        base_avoid = min(base, AVOID_BASE_SPEED)
+        # Pivot-arc: inner wheel reverse, outer wheel forward
+        if AVOID_SIDE == "LEFT":
+            vL = -AVOID_INNER_REV
+            vR = +AVOID_OUTER_FWD
+        else:
+            vL = +AVOID_OUTER_FWD
+            vR = -AVOID_INNER_REV
 
-        # optionally increase turn when very close to obstacle
-        # (front_min near ESCAPE_TRIGGER => turn stronger)
-        proximity_boost = 0.0
-        if front_min < (OBSTACLE_DIST * 0.7):
-            proximity_boost = 0.8
-
-        avoid_turn = AVOID_TURN + proximity_boost
-
-        # keep a small bias to still "remember" target direction (but not dominate)
-        avoid_turn += 0.15 * clamp(turn_cmd, -2.0, 2.0)
-
-        turn_use = +avoid_turn if AVOID_SIDE == "LEFT" else -avoid_turn
-
-        vL = clamp(base_avoid - turn_use, -MAX_SPEED, MAX_SPEED)
-        vR = clamp(base_avoid + turn_use, -MAX_SPEED, MAX_SPEED)
+        vL = clamp(vL, -MAX_SPEED, MAX_SPEED)
+        vR = clamp(vR, -MAX_SPEED, MAX_SPEED)
 
         left_motor.setVelocity(vL)
         right_motor.setVelocity(vR)
 
-        # exit avoid -> RECOVER (not directly GO)
-        if (front_min > OBSTACLE_DIST * 1.25) and (AVOID_HOLD <= 0.0):
-            AP_MODE = "RECOVER"
+        # Exit condition: stay in AVOID until lidar says it is clear (with debounce)
+        # Recommended: require front clear AND both side sectors reasonably clear
+        is_clear = (front_min >= OBSTACLE_DIST) and (left_min >= OBSTACLE_DIST) and (right_min >= OBSTACLE_DIST)
+
+        if is_clear:
+            AVOID_CLEAR_STREAK += 1
+        else:
+            AVOID_CLEAR_STREAK = 0
+
+        # When clear for N consecutive control steps, leave AVOID -> RECOVER (edge-guard) or GO
+        if AVOID_CLEAR_STREAK >= AVOID_CLEAR_STEPS:
+            AP_MODE = "RECOVER"          # keeps your edge-guard idea
             RECOVER_HOLD = RECOVER_TIME
-            AVOID_SIDE = None
-            AVOID_HOLD = 0.0
+            AVOID_CLEAR_STREAK = 0
+            #AVOID_SIDE = None
 
         return {
             "status": "AVOID",
             "dist": dist, "yaw_error": yaw_error,
             "front": front_min, "left": left_min, "right": right_min,
             "left_edge": left_edge_min, "right_edge": right_edge_min,
-            "vL": vL, "vR": vR
+            "vL": vL, "vR": vR,
+            "clear_streak": AVOID_CLEAR_STREAK,
+            "is_clear": is_clear
         }
 
     # 4) RECOVER: return-to-target but don't unwind into obstacle edges
@@ -359,9 +428,9 @@ def autopilot_step(
         turning_right = recover_turn < 0.0
 
         # Edge guard: if turning into obstacle edge, bounce away more decisively
-        if turning_left and (left_edge_min < EDGE_TRIGGER):
+        if turning_left and (left_edge_min < OBSTACLE_DIST):
             recover_turn = -EDGE_BOUNCE_TURN
-        elif turning_right and (right_edge_min < EDGE_TRIGGER):
+        elif turning_right and (right_edge_min < OBSTACLE_DIST):
             recover_turn = +EDGE_BOUNCE_TURN
 
         vL = clamp(base_rec - recover_turn, -MAX_SPEED, MAX_SPEED)
@@ -376,6 +445,9 @@ def autopilot_step(
         # - edges are not "too close" anymore
         if (RECOVER_HOLD <= 0.0) and (front_min > OBSTACLE_DIST * 1.2) and (left_edge_min > EDGE_TRIGGER) and (right_edge_min > EDGE_TRIGGER):
             AP_MODE = "GO"
+            # after recover finishes cleanly
+            LAST_AVOID_SIDE = None
+            AVOID_SIDE_LOCK = 0.0
 
         return {
             "status": "RECOVER",
@@ -384,6 +456,8 @@ def autopilot_step(
             "left_edge": left_edge_min, "right_edge": right_edge_min,
             "vL": vL, "vR": vR
         }
+    
+    
     # 5) GO
     vL = clamp(base - turn_cmd, -MAX_SPEED, MAX_SPEED)
     vR = clamp(base + turn_cmd, -MAX_SPEED, MAX_SPEED)
@@ -443,7 +517,9 @@ while robot.step(timestep) != -1:
             f"front={info.get('front', float('nan')):.2f}, "
             f"edgeL={info.get('left_edge', float('nan')):.2f}, "
             f"edgeR={info.get('right_edge', float('nan')):.2f}, "
-            f"vL={info.get('vL', 0.0):.2f}, vR={info.get('vR', 0.0):.2f}"
+            f"vL={info.get('vL', 0.0):.2f}, vR={info.get('vR', 0.0):.2f}, "
+            f"clear_streak={info.get('clear_streak', 0)}, "
+            f"is_clear={info.get('is_clear', False)}"
         )
         print("-----------------------------\n")
         time_acc = 0.0
