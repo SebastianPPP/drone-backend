@@ -1,0 +1,64 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load trajectory data
+df = pd.read_csv("data\heron_trajectory.csv")
+
+# Robot trajectory
+plt.plot(
+    df["robot_x"],
+    df["robot_y"],
+    label="Robot trajectory"
+)
+
+# # Obstacle (static – take first row)
+# plt.scatter(
+#     df["obstacle_x"].iloc[0],
+#     df["obstacle_y"].iloc[0],
+#     c="red",
+#     label="Obstacle (barrel)"
+# )
+
+# Obstacle (static — first row)
+otype = str(df["obstacle_type"].iloc[0])
+ox = df["obstacle_x"].iloc[0]
+oy = df["obstacle_y"].iloc[0]
+sx = df["obstacle_sx"].iloc[0]
+sy = df["obstacle_sy"].iloc[0]
+
+if sx > 0 and sy > 0:
+    rect = Rectangle(
+        (ox - sx / 2.0, oy - sy / 2.0),  # bottom-left corner
+        sx,
+        sy,
+        linewidth=2.5,                  # THICK OUTLINE
+        edgecolor="red",                # outline color
+        facecolor="none",               # no fill
+        linestyle="--",                 # dashed outline
+        label=f"Obstacle ({otype})"
+    )
+    plt.gca().add_patch(rect)
+else:
+    plt.scatter(
+        ox, oy,
+        c="red",
+        s=60,
+        label=f"Obstacle ({otype})"
+    )
+
+
+# Target position (static – take first row)
+plt.scatter(
+    df["target_x"].iloc[0],
+    df["target_y"].iloc[0],
+    c="green",
+    label="Target"
+)
+
+plt.axis("equal")
+plt.xlabel("X [m]")
+plt.ylabel("Y [m]")
+plt.title("Robot trajectory with obstacle and target")
+plt.legend()
+plt.grid(True)
+plt.show()
