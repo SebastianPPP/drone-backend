@@ -6,14 +6,13 @@
   
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 
-  <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
   <style>
     *{box-sizing:border-box}
-    body{margin:0;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;display:flex;height:100vh;background:#2a2a2a}
+    body{margin:0;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;display:flex;height:100vh;background:#2a2a2a;position:relative;}
     #sidebar{width:280px;background:#ffffff;border-right:2px solid #1322E6;padding:15px;overflow-y:auto;box-shadow:2px 0 8px rgba(19,34,230,0.3)}
     #sidebar h3{margin:12px 0 8px;font-size:1rem;color:#1322E6;border-bottom:2px solid #1322E6;padding-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
     .item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:6px;border-left:4px solid transparent;transition:all 0.2s;color:#e0e0e0}
@@ -25,6 +24,75 @@
     .item.selected.inactive{background:rgba(244,67,54,0.4);border-left-color:#f44336;outline:2px solid #f44336;color:#ff5252;box-shadow:0 0 12px rgba(244,67,54,0.6)}
     .item.selected.detected{background:rgba(158,158,158,0.4);border-left-color:#9e9e9e;outline:2px solid #9e9e9e;color:#bdbdbd;box-shadow:0 0 12px rgba(158,158,158,0.6)}
     #map{flex:1}
+
+    /* GAUGES CONTAINER */
+    #gauges-container {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 10px;
+      z-index: 1000;
+    }
+    
+    /* ATTITUDE INDICATOR */
+    .gauge {
+      width: 150px;
+      height: 150px;
+      background-color: rgba(0, 0, 0, 0.7);
+      border-radius: 50%;
+      border: 2px solid #555;
+      position: relative;
+      overflow: hidden;
+    }
+    #attitude-indicator {
+      background: linear-gradient(to bottom, #87CEEB 50%, #90EE90 50%);
+    }
+    .horizon-line {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: white;
+      transform: translateY(-50%);
+    }
+
+    /* COMPASS */
+    #compass {
+      background-color: rgba(40, 40, 40, 0.8);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      font-weight: bold;
+      position: relative;
+    }
+    .compass-rose {
+      width: 80%;
+      height: 80%;
+      border-radius: 50%;
+      border: 2px solid #777;
+      position: relative;
+    }
+    .compass-label {
+      position: absolute;
+      font-size: 14px;
+    }
+    .label-n { top: 5px; left: 50%; transform: translateX(-50%); }
+    .label-e { right: 5px; top: 50%; transform: translateY(-50%); }
+    .label-s { bottom: 5px; left: 50%; transform: translateX(-50%); }
+    .label-w { left: 5px; top: 50%; transform: translateY(-50%); }
+    .compass-needle {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 4px;
+      height: 50%;
+      background: red;
+      transform-origin: bottom center;
+      transform: translate(-50%, -100%) rotate(0deg);
+    }
   </style>
 </head>
 <body>
@@ -48,6 +116,21 @@
   </div>
 
   <div id="map"></div>
+
+  <div id="gauges-container">
+    <div id="attitude-indicator" class="gauge">
+      <div class="horizon-line"></div>
+    </div>
+    <div id="compass" class="gauge">
+      <div class="compass-rose">
+        <span class="compass-label label-n">N</span>
+        <span class="compass-label label-e">E</span>
+        <span class="compass-label label-s">S</span>
+        <span class="compass-label label-w">W</span>
+        <div class="compass-needle"></div>
+      </div>
+    </div>
+  </div>
 
   <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
