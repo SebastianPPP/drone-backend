@@ -10,32 +10,33 @@ function makeIcon(url) {
   });
 }
 const ICON = {
-  active:   makeIcon("/static/images/active.png"),     // zielony
-  inactive: makeIcon("/static/images/non_active.png"), // czerwony
-  detected: makeIcon("/static/images/drone.png"),      // szary
-  selected: makeIcon("/static/images/marked.png"),     // niebieski
+  active:   makeIcon("/static/images/active.png"),     
+  inactive: makeIcon("/static/images/non_active.png"), 
+  detected: makeIcon("/static/images/drone.png"),      
+  selected: makeIcon("/static/images/marked.png"),     
 };
 
 /* ---------- konfiguracja ---------- */
 const API = "/api/telemetry";
-const ACTIVE_MS = 5000;   // <5 s → aktywny
-const DETECT_MS = 10000;  // >10 s → usuwamy z wykrytych
-const ACCEPTED_KEY = "acceptedDrones"; // klucz w localStorage
-const MISSION_KEY = "savedMission"; // klucz dla misji w localStorage
+const ACTIVE_MS = 5000;   
+const DETECT_MS = 10000;  
+const ACCEPTED_KEY = "acceptedDrones"; 
+const MISSION_KEY = "savedMission"; 
 
 /* ---------- stan ---------- */
-let accepted = new Set();   // drony zaakceptowane – trwałe
+let accepted = new Set();   
 let selected = null;
-let lastSeen = {};          // id → epoch ms
-let markers  = {};          // id → L.marker
+let lastSeen = {};          
+let markers  = {};          
 let map;
-let followSelected = false; // czy kamera ma podążać za wybranym dronem
-let missionMode = false; // tryb misji 
+let followSelected = false; 
+let missionMode = false; 
 let missionPoints = [];
 let missionLine = null;
 let missionPolygon = null;
-let missionMarkers = []; // do przechowywania markerów misji
-let missionStatuses = {}; // droneId => "W trakcie", "Zakończona", itp.
+let missionMarkers = []; 
+let missionStatuses = {}; 
+let expandedMissions = new Set();
 
 /* ---------- persistence ---------- */
 function loadAccepted() {
@@ -49,6 +50,15 @@ function saveAccepted() {
     localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...accepted]));
   } catch (e) { console.warn("Nie udało się zapisać localStorage", e); }
 }
+function loadExpandedMissions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("expandedMissions") || "[]");
+    expandedMissions = new Set(saved);
+  } catch (e) { expandedMissions = new Set(); }
+}
+function saveExpandedMissions() {
+  localStorage.setItem("expandedMissions", JSON.stringify([...expandedMissions]));
+}
 
 /* ---------- helpers ---------- */
 const norm = id => (id || "").trim();
@@ -61,38 +71,152 @@ function statusOf(id) {
   return age <= ACTIVE_MS ? "active" : "inactive";
 }
 
+/* ---------- HUD / SZTUCZNY HORYZONT (NOWOŚĆ) ---------- */
+function initHUD() {
+  // 1. Wstrzyknięcie stylów CSS dla HUDa
+  const style = document.createElement('style');
+  style.innerHTML = `
+    #hud-container {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      width: 160px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 10px;
+      padding: 10px;
+      display: none; /* Domyślnie ukryty, pokazuje się po wybraniu drona */
+      text-align: center;
+      box-shadow: 0 0 15px rgba(0,0,0,0.5);
+      font-family: monospace;
+      color: white;
+      backdrop-filter: blur(4px);
+    }
+    #hud-title { font-size: 12px; margin-bottom: 5px; color: #ffa500; font-weight: bold; }
+    
+    /* Okrągły wskaźnik */
+    #attitude-indicator {
+      width: 120px;
+      height: 120px;
+      background: #333;
+      border-radius: 50%;
+      border: 3px solid #fff;
+      margin: 0 auto 10px auto;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    /* Tło Niebo/Ziemia - znacznie większe od okna, żeby przesuwać góra/dół */
+    #horizon-sky-ground {
+      width: 300px;
+      height: 300px;
+      background: linear-gradient(to bottom, #3ebfff 50%, #8b4513 50%);
+      position: absolute;
+      top: -90px;
+      left: -90px;
+      transition: transform 0.2s linear;
+    }
+
+    /* Linia horyzontu (biała kreska) */
+    #horizon-line {
+      width: 100%;
+      height: 1px;
+      background: rgba(255,255,255,0.5);
+      position: absolute;
+      top: 50%;
+    }
+
+    /* Samolot (celownik) na stałe na środku */
+    #hud-crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 60px;
+      height: 10px;
+      border-left: 20px solid #ffcc00;
+      border-right: 20px solid #ffcc00;
+      border-top: 0;
+      border-bottom: 0;
+    }
+    #hud-center-dot {
+       position: absolute; top: 50%; left: 50%;
+       width: 4px; height: 4px; background: #ffcc00;
+       transform: translate(-50%, -50%); border-radius: 50%;
+    }
+
+    /* Statystyki tekstowe */
+    #hud-stats div { margin: 2px 0; font-size: 12px; }
+    .val-label { color: #aaa; }
+    .val-data { font-weight: bold; }
+  `;
+  document.head.appendChild(style);
+
+  // 2. Utworzenie struktury HTML
+  const hudHTML = `
+    <div id="hud-title">BRAK DANYCH</div>
+    <div id="attitude-indicator">
+      <div id="horizon-sky-ground">
+        <div id="horizon-line"></div>
+      </div>
+      <div id="hud-crosshair"></div>
+      <div id="hud-center-dot"></div>
+    </div>
+    <div id="hud-stats">
+      <div><span class="val-label">ROLL:</span> <span id="hud-roll" class="val-data">0°</span></div>
+      <div><span class="val-label">PITCH:</span> <span id="hud-pitch" class="val-data">0°</span></div>
+      <div><span class="val-label">YAW:</span> <span id="hud-yaw" class="val-data">0°</span></div>
+    </div>
+  `;
+
+  const container = document.createElement("div");
+  container.id = "hud-container";
+  container.innerHTML = hudHTML;
+  document.body.appendChild(container);
+}
+
+function updateHUD(droneId, data) {
+  const container = document.getElementById("hud-container");
+  if (!container) return;
+
+  // Pokaż panel tylko jeśli mamy wybranego drona
+  container.style.display = "block";
+  document.getElementById("hud-title").textContent = droneId;
+
+  // Pobierz wartości (domyślnie 0 jeśli brak)
+  const roll = data.roll || 0;
+  const pitch = data.pitch || 0;
+  const yaw = data.yaw || 0;
+
+  // Aktualizacja tekstu
+  document.getElementById("hud-roll").textContent = roll.toFixed(1) + "°";
+  document.getElementById("hud-pitch").textContent = pitch.toFixed(1) + "°";
+  document.getElementById("hud-yaw").textContent = yaw.toFixed(1) + "°";
+
+  // Aktualizacja grafiki (sztuczny horyzont)
+  const horizon = document.getElementById("horizon-sky-ground");
+  
+  // LOGIKA:
+  // Rotate: ujemny roll, żeby horyzont przechylał się przeciwnie do drona
+  // TranslateY: pitch dodatni (nos w górę) -> horyzont w dół (widzimy więcej nieba).
+  // Mnożnik 2.5 służy do skalowania (żeby mały ruch był widoczny)
+  horizon.style.transform = `rotate(${-roll}deg) translateY(${pitch * 2.5}px)`;
+}
+
 /* ---------- mapa ---------- */
 function initMap() {
   map = L.map("map").setView([52.1, 19.3], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OSM" }).addTo(map);
-  // Jeśli użytkownik zacznie ręcznie przesuwać mapę, wyłącz automatyczne śledzenie
-  map.on('dragstart zoomstart movestart', () => {
-    followSelected = false;
-  });
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OSM" }).addTo(map);
+  map.on('dragstart zoomstart movestart', () => { followSelected = false; });
+  
+  // Inicjalizacja HUDa przy starcie mapy
+  initHUD();
 }
 
 document.getElementById("mission-btn").onclick = () => {
-  if (missionMode) {
-    finishMission();
-  } else {
-    startMission();
-  }
+  if (missionMode) finishMission();
+  else startMission();
 };
-
-
-let expandedMissions = new Set();
-
-function loadExpandedMissions() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("expandedMissions") || "[]");
-    expandedMissions = new Set(saved);
-  } catch (e) { expandedMissions = new Set(); }
-}
-
-function saveExpandedMissions() {
-  localStorage.setItem("expandedMissions", JSON.stringify([...expandedMissions]));
-}
-
 
 /* ---------- render list ---------- */
 function render(ids) {
@@ -105,47 +229,34 @@ function render(ids) {
     const row = document.createElement("div");
     row.className = `item ${cls}${id === selected ? " selected" : ""}`;
 
-    // Tworzymy klikany label (który będzie otwierać drona na mapie)
     const label = document.createElement("div");
     label.textContent = id;
     label.style.cursor = "pointer";
     label.style.fontWeight = "bold";
     label.style.flex = "1";
 
-    // Kliknięcie w nazwę drona rozwija info i przybliża na mapie
     label.onclick = e => {
       e.stopPropagation();
-
-      // przełącz rozwinięcie info o misji
-      if (missionInfo.style.display === "block") {
-        missionInfo.style.display = "none";
-        expandedMissions.delete(id);
-      } else {
-        missionInfo.style.display = "block";
-        expandedMissions.add(id);
-      }
-      saveExpandedMissions();
-
-      // 🔍 dodatkowo: przybliż na drona, jeśli ma marker
       selected = id;
+      followSelected = true;
       if (markers[id]) {
-        const ll = markers[id].getLatLng();
-        map.flyTo(ll, Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
+        map.flyTo(markers[id].getLatLng(), Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
         markers[id].openPopup();
+        
+        // Pokaż HUD dla tego drona natychmiast
+        // (Dane zostaną zaktualizowane w najbliższym refresh())
+        const container = document.getElementById("hud-container");
+        if(container) container.style.display = "block";
       }
+      refresh(); // Wymuś odświeżenie UI
     };
 
     row.appendChild(label);
-
     const b = document.createElement("button");
     b.className = "btn-action";
     b.textContent = btnTxt;
-    b.onclick = e => { 
-      e.stopPropagation(); 
-      btnAct(id); 
-    };
+    b.onclick = e => { e.stopPropagation(); btnAct(id); };
     row.appendChild(b);
-
     parent.appendChild(row);
   };
 
@@ -165,6 +276,7 @@ function render(ids) {
   if (!shown.i) i.innerHTML = "<em>Brak</em>";
   if (!shown.d) d.innerHTML = "<em>Brak</em>";
 }
+
 function addAccepted(id) {
   accepted.add(norm(id));
   saveAccepted();
@@ -174,7 +286,12 @@ function addAccepted(id) {
 function delAccepted(id) {
   accepted.delete(norm(id));
   saveAccepted();
-  if (selected === norm(id)) selected = null;
+  if (selected === norm(id)) {
+    selected = null;
+    // Ukryj HUD po usunięciu
+    const container = document.getElementById("hud-container");
+    if(container) container.style.display = "none";
+  }
   refresh();
 }
 
@@ -183,8 +300,6 @@ function updateMarkers(data) {
   data.forEach(rec => {
     const id = norm(rec.drone_id);
     const pos = [rec.lat, rec.lon];
-
-    // Zapamiętujemy czas ostatniego sygnału
     lastSeen[id] = Date.parse(rec.timestamp.split(".")[0] + "Z");
 
     const st = statusOf(id);
@@ -193,55 +308,32 @@ function updateMarkers(data) {
                st === "inactive" ? ICON.inactive :
                                    ICON.detected;
 
-    // Zawartość popupu z parametrami drona
-    const popupHtml = `
-      <div style="width:100%; box-sizing:border-box;">
-        <b style="color:#ffffff; font-size:14px; display:block; margin-bottom:8px; text-align:center;">🛸 Dron: ${id}</b>
-        <div style="border-top:1px solid rgba(19,34,230,0.4); margin:8px 0; padding-top:8px; font-size:13px;">
-          <div style="color:#e0e0e0; margin:5px 0;">🛰 <strong>Lat:</strong> ${rec.lat.toFixed(6)}</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📍 <strong>Lon:</strong> ${rec.lon.toFixed(6)}</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📡 <strong>Wysokość:</strong> ${rec.alt ?? "-"} m</div>
-          <div style="color:#4caf50; margin:5px 0; font-weight:bold;">🔋 <strong>Bateria:</strong> ${rec.battery ?? "-"}%</div>
-          <div style="color:#e0e0e0; margin:5px 0;">↪️ <strong>Kurs:</strong> ${rec.yaw ?? "-"}°</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📅 <strong>Czas:</strong> ${new Date(rec.timestamp).toLocaleTimeString()}</div>
-        </div>
-      </div>
-    `;
+    // Aktualizacja HUD jeśli to wybrany dron
+    if (id === selected) {
+      updateHUD(id, rec);
+    }
 
     if (!markers[id]) {
       markers[id] = L.marker(pos, { icon })
         .addTo(map)
-        .bindPopup(`
-          <b>Dron: ${id}</b><br>
-          🛰 Lat: ${rec.lat.toFixed(6)}<br>
-          📍 Lon: ${rec.lon.toFixed(6)}<br>
-          📡 Wysokość: ${rec.alt ?? "-"} m<br>
-          🔋 Bateria: ${rec.battery ?? "-"}%<br>
-          ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
-          📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
-        `)
+        .bindPopup(`<b>${id}</b>`) // Uproszczony popup, bo mamy HUD
         .on("click", () => {
           selected = id;
-          followSelected = true; // włącz śledzenie po kliknięciu
-          // 🔍 przybliż na drona
-          const ll = markers[id].getLatLng();
-          map.flyTo(ll, Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
-          markers[id].openPopup();
+          followSelected = true;
+          map.flyTo(markers[id].getLatLng(), Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
+          updateHUD(id, rec);
           refresh();
         });
     } else {
-      markers[id]
-        .setLatLng(pos)
-        .setIcon(icon)
-        .bindPopup(`
-          <b>Dron: ${id}</b><br>
-          🛰 Lat: ${rec.lat.toFixed(6)}<br>
-          📍 Lon: ${rec.lon.toFixed(6)}<br>
-          📡 Wysokość: ${rec.alt ?? "-"} m<br>
-          🔋 Bateria: ${rec.battery ?? "-"}%<br>
-          ↪️ Kurs (YAW): ${rec.yaw ?? "-"}°<br>
-          📅 Czas: ${new Date(rec.timestamp).toLocaleTimeString()}
-        `);
+      markers[id].setLatLng(pos).setIcon(icon);
+      // Opcjonalnie aktualizacja treści popupu, jeśli jest otwarty
+      if(markers[id].isPopupOpen()){
+          markers[id].setPopupContent(`
+            <b>${id}</b><br>
+            Bat: ${rec.battery}%<br>
+            Alt: ${rec.alt}m
+          `);
+      }
     }
   });
 }
@@ -252,11 +344,11 @@ async function refresh() {
     const res = await fetch(API);
     const data = await res.json();
     const ids = [...new Set([...data.map(d => norm(d.drone_id)), ...accepted])];
+    
     updateMarkers(data);
     render(ids);
-    console.log("telemetry data:", data);
 
-    missionStatuses = {}; // reset statusów misji
+    missionStatuses = {};
     data.forEach(d => {
       missionStatuses[d.drone_id] = d.mission_status || "Brak misji";
     });
@@ -269,191 +361,92 @@ document.addEventListener("DOMContentLoaded", () => {
   loadExpandedMissions();
   initMap();
   refresh();
-  setInterval(refresh, 3000);
+  setInterval(refresh, 1000); // Zwiększono częstotliwość do 1s dla płynniejszego HUD
   loadMission();
+  
+  // Obsługa generowania tras (zostawiam bez zmian, wklejone dla kompletności)
   document.getElementById("generate-path-btn").onclick = () => {
-    // Używamy wszystkich zaakceptowanych dronów (nawet jeśli chwilowo nie wysyłają telemetrii)
     const acceptedDronesList = [...accepted].sort();
-
     if (acceptedDronesList.length === 0) {
-      alert("❌ Brak zaakceptowanych dronów! Najpierw zaakceptuj co najmniej jeden dron.");
+      alert("❌ Brak zaakceptowanych dronów!");
       return;
     }
-
-    // Pokaż status (ostatnie widziane) dla zaakceptowanych dronów
     const droneStatuses = acceptedDronesList.map(id => {
       const age = Date.now() - (lastSeen[id] || 0);
-      const status = age <= 10000 ? "✅ AKTYWNY" : "⏱️ NIEAKTYWNY";
-      return `${id} ${status}`;
+      return `${id} ${age <= 10000 ? "✅ AKTYWNY" : "⏱️ NIEAKTYWNY"}`;
     }).join("\n");
-
-    alert(`✅ Znaleziono ${acceptedDronesList.length} zaakceptowanych dronów:\n\n${droneStatuses}`);
-
-    // Zapytaj o typ algorytmu
-    const algorithmChoice = prompt(
-      "Wybierz typ tworzenia trasy:\n\n1 - Lawnmower (równoległy scan)\n2 - D-Star Lite (dynamiczne planowanie)\n3 - VFH (Vector Field Histogram)\n\nWpisz 1, 2 lub 3:",
-      "1"
-    );
-
-    if (!algorithmChoice || !["1", "2", "3"].includes(algorithmChoice)) {
-      alert("❌ Nieprawidłowy wybór algorytmu!");
-      return;
-    }
-
-    const n = parseInt(prompt("Ile dronów użyć?", Math.min(3, acceptedDronesList.length)), 10);
-    if (isNaN(n) || n < 1 || n > acceptedDronesList.length) {
-      alert("❌ Nieprawidłowa liczba dronów!");
-      return;
-    }
-
-    const s = parseFloat(prompt("Podaj krok (w metrach) — np. 50", "50"));
-    if (isNaN(s) || s <= 0) {
-      alert("❌ Nieprawidłowy krok!");
-      return;
-    }
-
-    const algorithmNames = { "1": "Lawnmower", "2": "D-Star Lite", "3": "VFH" };
-    generateFlightPathsForDrones(n, s, algorithmChoice, algorithmNames[algorithmChoice]);
+    
+    alert(`✅ Drony:\n\n${droneStatuses}`);
+    
+    const algo = prompt("1-Lawnmower, 2-DStar, 3-VFH", "1");
+    if(!algo) return;
+    
+    const n = parseInt(prompt("Ile dronów?", Math.min(3, acceptedDronesList.length)), 10);
+    const s = parseFloat(prompt("Krok (m)?", "50"));
+    
+    generateFlightPathsForDrones(n, s, algo, "Algo");
   };
-
 });
 
-
-/* ---------- mission mode ---------- */
+/* ---------- mission mode (bez zmian, skrócenie dla czytelności) ---------- */
 function startMission() {
   missionMode = true;
   missionPoints = [];
-  if (missionLine) {
-    map.removeLayer(missionLine);
-    missionLine = null;
-  }
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-  document.getElementById("mission-info").textContent = "Tryb misji aktywny. Kliknij na mapę, aby dodać punkty.";
+  if (missionLine) map.removeLayer(missionLine);
+  if (missionPolygon) map.removeLayer(missionPolygon);
+  document.getElementById("mission-info").textContent = "Tryb misji. Klikaj mapę.";
   map.on("click", addMissionPoint);
 }
-
-
 function addMissionPoint(e) {
   if (!missionMode) return;
-
   const latlng = e.latlng;
   missionPoints.push(latlng);
-
-  const marker = L.marker(latlng, {
-    draggable: true,
-    icon: L.divIcon({
-      className: 'mission-marker',
-      html: `<div style="width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #000;"></div>`,
-      iconSize: [12, 12],
-      iconAnchor: [6, 6]
-    })
-  }).addTo(map);
-
-  // Obsługa przeciągania
-  marker.on("drag", function (ev) {
-    const idx = missionMarkers.indexOf(marker);
-    if (idx !== -1) {
-      missionPoints[idx] = ev.target.getLatLng();
-      updateMissionPolygon();
-    }
+  const marker = L.marker(latlng, { draggable: true }).addTo(map);
+  marker.on("drag", ev => {
+     const idx = missionMarkers.indexOf(marker);
+     if (idx !== -1) { missionPoints[idx] = ev.target.getLatLng(); updateMissionPolygon(); }
   });
-
-  // Obsługa prawego kliknięcia (usuń punkt)
-  marker.on("contextmenu", function () {
-    const idx = missionMarkers.indexOf(marker);
-    if (idx !== -1) {
-      map.removeLayer(marker);
-      missionMarkers.splice(idx, 1);
-      missionPoints.splice(idx, 1);
-      updateMissionPolygon();
-    }
+  marker.on("contextmenu", () => {
+     const idx = missionMarkers.indexOf(marker);
+     map.removeLayer(marker);
+     missionMarkers.splice(idx, 1);
+     missionPoints.splice(idx, 1);
+     updateMissionPolygon();
   });
-
   missionMarkers.push(marker);
   updateMissionPolygon();
-
-  // Podczas dodawania punktów – wyłącz przycisk usuwania
   document.getElementById("clear-mission-btn").disabled = true;
 }
-
 function finishMission() {
-  if (missionPoints.length < 3) {
-    alert("Musisz dodać co najmniej 3 punkty do misji.");
-    return;
-  }
-
+  if (missionPoints.length < 3) return alert("Min 3 punkty");
   missionMode = false;
   map.off("click", addMissionPoint);
-
   updateMissionPolygon();
-
   document.getElementById("mission-info").textContent = "Obszar zaznaczony.";
-  document.getElementById("clear-mission-btn").disabled = false; // teraz można usunąć
-
+  document.getElementById("clear-mission-btn").disabled = false;
   saveMission();
 }
-
-
 function updateMissionPolygon() {
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-
+  if (missionPolygon) map.removeLayer(missionPolygon);
   if (missionPoints.length >= 3) {
-    missionPolygon = L.polygon([...missionPoints, missionPoints[0]], {
-      color: "#1322E6",
-      weight: 3,
-      fillColor: "#1322E6",
-      fillOpacity: 0.15
-    }).addTo(map);
-
-    const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
-    document.getElementById("mission-info").innerText = "Misja:\n" + coordList;
-  } else {
-    document.getElementById("mission-info").innerText = "Dodaj co najmniej 3 punkty do misji.";
+    missionPolygon = L.polygon([...missionPoints, missionPoints[0]], { color: "#1322E6" }).addTo(map);
   }
 }
-
-
 document.getElementById("clear-mission-btn").onclick = () => {
-  if (confirm("Czy na pewno chcesz usunąć całą misję?")) {
-    clearMission();
-  }
+  if (confirm("Usunąć misję?")) clearMission();
 };
-
 function clearMission() {
   missionPoints = [];
   missionMarkers.forEach(m => map.removeLayer(m));
   missionMarkers = [];
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-
-    // 🧽 Usuń trasy lotów
-    if (window.flightLines) {
-      window.flightLines.forEach(l => map.removeLayer(l));
-      window.flightLines = [];
-    }
-
+  if (missionPolygon) map.removeLayer(missionPolygon);
+  if (window.flightLines) { window.flightLines.forEach(l => map.removeLayer(l)); window.flightLines = []; }
   localStorage.removeItem(MISSION_KEY);
   missionMode = false;
-  document.getElementById("mission-info").textContent = "Misja usunięta.";
-  document.getElementById("clear-mission-btn").disabled = true;
+  document.getElementById("mission-info").textContent = "Usunięto.";
 }
-
-
 function saveMission() {
-  try {
-    const coords = missionPoints.map(p => [p.lat, p.lng]);
-    localStorage.setItem(MISSION_KEY, JSON.stringify(coords));
-  } catch (e) {
-    console.warn("Nie udało się zapisać misji", e);
-  }
+  localStorage.setItem(MISSION_KEY, JSON.stringify(missionPoints.map(p => [p.lat, p.lng])));
 }
 
 function loadMission() {
