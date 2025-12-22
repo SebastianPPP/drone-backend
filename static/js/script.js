@@ -35,7 +35,10 @@ let markers  = {};
 let map;
 let followSelected = false; 
 
-// Misja
+// Przechowywanie linii "przyszłej trasy" (next_waypoints)
+let futureLines = {}; // { drone_id: L.polyline }
+
+// Misja (edycja)
 let missionMode = false; 
 let missionPoints = [];
 let missionPolygon = null;
@@ -101,12 +104,12 @@ function render(ids) {
   const d = document.getElementById("detected-list");
   a.innerHTML = i.innerHTML = d.innerHTML = "";
 
-  const addRow = (parent, id, cls, btnTxt, btnAct) => {
+  const addRow = (parent, id, cls, btnTxt, btnAct, extraInfo="") => {
     const row = document.createElement("div");
     row.className = `item ${cls}${id === selected ? " selected" : ""}`;
 
     const label = document.createElement("div");
-    label.textContent = id;
+    label.innerHTML = `<b>${id}</b> ${extraInfo}`;
     label.style.flex = "1";
     label.onclick = e => { e.stopPropagation(); selectDrone(id); };
 
@@ -123,9 +126,17 @@ function render(ids) {
   ids.forEach(raw => {
     const id = norm(raw);
     const st = statusOf(id);
+    
+    // Pobieramy dodatkowe dane do wyświetlenia na liście (np. rola)
+    let roleInfo = "";
+    if (window.cachedData && window.cachedData[id]) {
+        const r = window.cachedData[id].role || "None";
+        if (r !== "None") roleInfo = `<small>(${r})</small>`;
+    }
+
     if (st === "gone") return;
     if (accepted.has(id)) {
-      if (st === "active")  { addRow(a, id, "active",   "❌", delAccepted); shown.a++; }
+      if (st === "active")  { addRow(a, id, "active",   "❌", delAccepted, roleInfo); shown.a++; }
       else                   { addRow(i, id, "inactive", "❌", delAccepted); shown.i++; }
     } else if (st === "detected") {
       addRow(d, id, "detected", "➕", addAccepted); shown.d++;
@@ -148,10 +159,15 @@ function selectDrone(id) {
 function addAccepted(id) { accepted.add(norm(id)); saveAccepted(); if (!selected) selectDrone(norm(id)); else refresh(); }
 function delAccepted(id) { accepted.delete(norm(id)); saveAccepted(); if (selected === norm(id)) selected = null; refresh(); }
 
-/* ---------- MARKERY ---------- */
+/* ---------- MARKERY & WIZUALIZACJA ---------- */
 function updateMarkers(data) {
+  // Cache data for render()
+  window.cachedData = {};
+  
   data.forEach(rec => {
     const id = norm(rec.drone_id);
+    window.cachedData[id] = rec;
+    
     const pos = [rec.lat, rec.lon];
     lastSeen[id] = Date.parse(rec.timestamp.split(".")[0] + "Z") || Date.now();
 
@@ -163,16 +179,41 @@ function updateMarkers(data) {
 
     if (id === selected) updateHUD(rec);
 
+    // 1. Aktualizacja Markera
+    let popupContent = `<b>${id}</b><br>Bat: ${rec.battery || '?'}%<br>Alt: ${rec.alt || 0}m<br>Role: ${rec.role || '-'}`;
+    
     if (!markers[id]) {
       markers[id] = L.marker(pos, { icon })
         .addTo(map)
-        .bindPopup(`<b>${id}</b>`)
+        .bindPopup(popupContent)
         .on("click", () => selectDrone(id));
     } else {
       markers[id].setLatLng(pos).setIcon(icon);
       if(markers[id].isPopupOpen()){
-          markers[id].setPopupContent(`<b>${id}</b><br>Bat: ${rec.battery || '?'}%<br>Alt: ${rec.alt || 0}m`);
+          markers[id].setPopupContent(popupContent);
       }
+    }
+
+    // 2. Wizualizacja "Next Waypoints" (Zielona linia wychodząca z drona)
+    if (rec.next_waypoints && Array.isArray(rec.next_waypoints) && rec.next_waypoints.length > 0) {
+        // Budujemy linię: [PozycjaDrona, Punkt1, Punkt2, ...]
+        const pathLine = [pos]; 
+        rec.next_waypoints.forEach(wp => {
+            pathLine.push([wp.lat, wp.lon]);
+        });
+
+        // Jeśli linia już jest, aktualizujemy ją, jeśli nie - tworzymy
+        if (futureLines[id]) {
+            futureLines[id].setLatLngs(pathLine);
+        } else {
+            futureLines[id] = L.polyline(pathLine, { color: '#00ff00', weight: 3, opacity: 0.7, dashArray: '5, 5' }).addTo(map);
+        }
+    } else {
+        // Jeśli brak punktów, usuwamy linię
+        if (futureLines[id]) {
+            map.removeLayer(futureLines[id]);
+            delete futureLines[id];
+        }
     }
   });
 }
@@ -254,24 +295,18 @@ function loadMission() {
    } catch(e){}
 }
 
-// *** WYSYŁANIE KOMENDY STOP NA SERWER ***
 function clearMission() {
-  if (confirm("Usunąć misję i wystawić flagę STOP?")) {
-    
-    // Wysyłamy do serwera informację, że dron ma się zatrzymać, jak tylko odpyta serwer
+  if (confirm("Usunąć misję i ZATRZYMAĆ drony?")) {
     fetch(API_STOP, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ drones: [] }) // Empty = all
+      body: JSON.stringify({ drones: [] }) 
     })
     .then(r => r.json())
     .then(d => {
-       console.log("STOP flag set on server:", d);
-       alert("🛑 Flaga STOP ustawiona na serwerze.");
-    })
-    .catch(e => alert("Błąd API: " + e));
+       alert("🛑 Wysłano STOP do wszystkich dronów.");
+    });
 
-    // UI Cleanup
     missionPoints = [];
     missionMarkers.forEach(m => map.removeLayer(m));
     missionMarkers = [];
@@ -283,14 +318,14 @@ function clearMission() {
   }
 }
 
-/* ---------- GENEROWANIE I WGRYWANIE (UPLOAD) ---------- */
+/* ---------- GENEROWANIE TRASY I PRZYPISYWANIE RÓL ---------- */
 function handleGeneratePath() {
   if (!missionPolygon) return alert("Najpierw zaznacz obszar!");
   
   const numDrones = parseInt(prompt("Liczba dronów?", "1"), 10) || 1;
   const stepMeters = parseFloat(prompt("Odstęp (m)?", "50")) || 50;
   
-  // Obliczenia Turf (Lawnmower)
+  // 1. Obliczenia Turf (Lawnmower)
   const latlngs = missionPolygon.getLatLngs()[0]; 
   const coords = latlngs.map(p => [p.lng, p.lat]);
   coords.push(coords[0]); 
@@ -313,9 +348,9 @@ function handleGeneratePath() {
      x += stepDeg;
   }
   
-  if(lines.length === 0) return alert("Błąd generowania trasy (za mały obszar?).");
+  if(lines.length === 0) return alert("Błąd generowania (za mały obszar?).");
   
-  // Rysowanie
+  // 2. Rysowanie poglądowe
   if (window.flightLines) window.flightLines.forEach(l => map.removeLayer(l));
   window.flightLines = [];
   
@@ -325,13 +360,12 @@ function handleGeneratePath() {
     else            { fullPath.push(seg[1]); fullPath.push(seg[0]); }
   });
   
-  // Dane do wysyłki
+  // 3. Podział na drony i przypisanie RÓL
   const newMissionId = "MSN-" + Date.now().toString().slice(-6); 
   const part = Math.ceil(fullPath.length / numDrones);
   const colors = ["red", "orange", "purple"];
   const payloadDrones = {};
   
-  // Domyślny ID jeśli brak aktywnych, żeby można było testować
   let activeIds = [...accepted];
   if (activeIds.length === 0) activeIds = ["drone_1"]; 
   
@@ -351,14 +385,18 @@ function handleGeneratePath() {
           alt: 20
      }));
 
+     // Logika ról: Pierwszy dron to LEADER, reszta FOLLOWER
+     const assignedRole = (d === 0) ? "leader" : "follower";
+
      payloadDrones[targetId] = {
          mission_id: newMissionId,
-         waypoints: waypoints
+         waypoints: waypoints,
+         role: assignedRole // <-- Tu wysyłamy rolę na serwer
      };
   }
   
-  // UPLOAD DO SERWERA (Zapis, bez bezpośredniego połączenia z dronem)
-  document.getElementById("mission-info").textContent = "Wgrywanie na serwer...";
+  // 4. Wysyłka
+  document.getElementById("mission-info").textContent = "Wgrywanie...";
   
   fetch(API_UPLOAD, {
       method: "POST",
@@ -368,15 +406,15 @@ function handleGeneratePath() {
   .then(r => r.json())
   .then(d => {
     if(d.status === "STORED") {
-        alert("✅ Misja wystawiona na serwerze!\nID: " + newMissionId + "\nDron pobierze ją przy synchronizacji.");
-        document.getElementById("mission-info").textContent = "Wystawiono: " + newMissionId;
+        alert("✅ Misja wgrana! Przypisano role.\nID: " + newMissionId);
+        document.getElementById("mission-info").textContent = "Aktywna: " + newMissionId;
     } else {
-        alert("Błąd serwera: " + JSON.stringify(d));
+        alert("Błąd: " + JSON.stringify(d));
     }
   })
   .catch(e => {
       console.error(e);
-      alert("Błąd połączenia z serwerem.");
+      alert("Błąd połączenia.");
   });
 }
 

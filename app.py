@@ -5,23 +5,21 @@ import time
 app = Flask(__name__)
 
 # --- BAZA DANYCH W PAMIĘCI (RAM) ---
-# Przechowuje aktualny stan dla każdego drona
-drones_db = {}
-
-# Struktura rekordu w drones_db:
-# drones_db["drone_1"] = {
-#     "telemetry": { ... },
-#     "current_mission": { "mission_id": "...", "waypoints": [...] },  # Ostatnia wgrana misja
-#     "pending_command": None,  # Np. "STOP", "RETURN" - komenda do pobrania przez drona
+# Struktura:
+# drones_db["skimmer1"] = {
+#     "telemetry": { ... },       # To co dron zgłasza (lat, lon, battery, next_waypoints, reported_role)
+#     "assigned_role": "None",    # Rola nadana przez serwer (Leader/Follower)
+#     "current_mission": None,    # Obiekt misji: { "id": "...", "waypoints": [...] }
 #     "last_seen": timestamp
 # }
+drones_db = {}
 
 def get_drone_entry(drone_id):
     if drone_id not in drones_db:
         drones_db[drone_id] = {
             "telemetry": {},
+            "assigned_role": "None", 
             "current_mission": None,
-            "pending_command": None,
             "last_seen": 0
         }
     return drones_db[drone_id]
@@ -31,13 +29,12 @@ def index():
     return render_template("index.html")
 
 # ==========================================
-# 1. ENDPOINTY DLA FRONTENDU (Panel WWW)
+# GŁÓWNY ENDPOINT KOMUNIKACJI (Dwukierunkowy)
 # ==========================================
-
-# Odbieranie danych telemetrycznych (może być wysyłane przez drona, a czytane przez JS)
 @app.route("/api/telemetry", methods=["GET", "POST"])
 def telemetry():
-    # DRON -> SERWER: Dron wysyła swoją pozycję
+    # 1. DRON -> SERWER (POST)
+    # Dron wysyła swój stan, a serwer w odpowiedzi odsyła rozkazy (rolę i misję)
     if request.method == "POST":
         data = request.get_json()
         drone_id = data.get("drone_id")
@@ -45,6 +42,8 @@ def telemetry():
             return jsonify({"error": "No drone_id"}), 400
         
         entry = get_drone_entry(drone_id)
+        
+        # Zapisujemy to, co przysłał dron
         entry["telemetry"] = {
             "drone_id": drone_id,
             "lat": data.get("lat"),
@@ -54,20 +53,38 @@ def telemetry():
             "roll": data.get("roll", 0),
             "pitch": data.get("pitch", 0),
             "yaw": data.get("yaw", 0),
+            # Nowe pola z drone_telem.py
+            "role": data.get("role", "None"), # Rola zgłaszana przez drona
+            "mission_status": data.get("mission_status", "nothing"),
+            "next_waypoints": data.get("next_waypoints", []),
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         entry["last_seen"] = time.time()
-        return jsonify({"status": "ok"}), 200
+        
+        # PRZYGOTOWANIE ODPOWIEDZI DLA DRONA
+        # Dron oczekuje JSON-a z kluczami: "role" i "mission"
+        response_payload = {
+            "role": entry["assigned_role"],   # Serwer narzuca rolę (np. leader)
+            "mission": entry["current_mission"] # Serwer wysyła misję (lub null)
+        }
+        
+        return jsonify(response_payload), 200
 
-    # FRONTEND -> SERWER: JS pobiera listę wszystkich dronów do wyświetlenia na mapie
+    # 2. FRONTEND -> SERWER (GET)
+    # JS pobiera listę wszystkich dronów do wyświetlenia na mapie
     all_telemetry = []
     for d_id, data in drones_db.items():
         if data["telemetry"]:
-            all_telemetry.append(data["telemetry"])
+            # Doklejamy assigned_role do podglądu, żeby widzieć na mapie co serwer kazał robić
+            telem_copy = data["telemetry"].copy()
+            telem_copy["server_assigned_role"] = data["assigned_role"]
+            all_telemetry.append(telem_copy)
     return jsonify(all_telemetry)
 
 
-# Frontend wysyła misję -> Serwer zapisuje ją "na półce"
+# ==========================================
+# ZARZĄDZANIE MISJĄ
+# ==========================================
 @app.route("/api/mission/upload", methods=["POST"])
 def upload_mission():
     data = request.get_json()
@@ -75,26 +92,31 @@ def upload_mission():
     
     saved_ids = []
     
-    for drone_id, mission_data in drones_payload.items():
+    for drone_id, mission_config in drones_payload.items():
         entry = get_drone_entry(drone_id)
-        # Nadpisujemy aktualną misję nową
-        entry["current_mission"] = mission_data
-        # Czyścimy ewentualne komendy stop, bo wchodzi nowa misja
-        entry["pending_command"] = "NEW_MISSION_AVAILABLE" 
-        saved_ids.append(drone_id)
         
-        print(f"💾 [SERVER] Zapisano misję dla {drone_id} (ID: {mission_data.get('mission_id')})")
+        # Frontend wysyła teraz strukturę: { "mission_id": "...", "waypoints": [...], "role": "..." }
+        entry["current_mission"] = {
+            "id": mission_config.get("mission_id"),
+            "waypoints": mission_config.get("waypoints")
+        }
+        
+        # Ustawiamy rolę zadaną przez operatora (Frontend)
+        if "role" in mission_config:
+            entry["assigned_role"] = mission_config["role"]
+            
+        saved_ids.append(drone_id)
+        print(f"💾 [SERVER] Wgrano misję i rolę '{entry['assigned_role']}' dla {drone_id}")
 
     return jsonify({
         "status": "STORED",
-        "message": "Misja zapisana na serwerze. Czekam aż dron ją pobierze.",
         "drones": saved_ids
     })
 
 
-# Frontend wysyła STOP -> Serwer ustawia flagę
 @app.route("/api/mission/stop", methods=["POST"])
 def stop_mission():
+    """Awaryjne czyszczenie misji."""
     data = request.get_json()
     target_drones = data.get("drones", [])
     
@@ -103,43 +125,13 @@ def stop_mission():
 
     for drone_id in target_drones:
         entry = get_drone_entry(drone_id)
-        entry["pending_command"] = "STOP" # Flaga dla drona
-        # Opcjonalnie usuwamy misję z pamięci, żeby dron nie wznowił
+        # Usuwamy misję -> dron otrzyma null w odpowiedzi na telemetry i (zależnie od logiki) się zatrzyma
         entry["current_mission"] = None
-        print(f"🛑 [SERVER] Ustawiono flagę STOP dla {drone_id}")
+        entry["assigned_role"] = "None"
+        print(f"🛑 [SERVER] STOP dla {drone_id}")
 
-    return jsonify({"status": "FLAG_SET", "command": "STOP"})
-
-
-# ==========================================
-# 2. ENDPOINTY DLA DRONA (To tutaj dron pobiera dane)
-# ==========================================
-
-# Dron odpytuje ten adres np. co 1s: GET /api/drone/sync/drone_1
-@app.route("/api/drone/sync/<drone_id>", methods=["GET"])
-def drone_sync(drone_id):
-    if drone_id not in drones_db:
-        return jsonify({"command": "None", "mission": None})
-
-    entry = drones_db[drone_id]
-    
-    response = {
-        "command": entry["pending_command"], # np. "STOP", "NEW_MISSION_AVAILABLE" lub None
-        "mission": None
-    }
-    
-    # Jeśli jest nowa misja i dron o nią pyta (lub po prostu zawsze zwracamy aktualną)
-    if entry["current_mission"]:
-        response["mission"] = entry["current_mission"]
-
-    # Po pobraniu komendy STOP, możemy ją wyczyścić (żeby nie stopował w kółko), 
-    # ale bezpieczniej trzymać, dopóki dron nie potwierdzi (tu wersja uproszczona):
-    if entry["pending_command"] == "NEW_MISSION_AVAILABLE":
-        entry["pending_command"] = None # Reset flagi powiadomienia
-
-    return jsonify(response)
+    return jsonify({"status": "STOPPED"})
 
 
 if __name__ == "__main__":
-    # Host 0.0.0.0 pozwala na dostęp z sieci lokalnej (dron widzi serwer po IP)
     app.run(host='0.0.0.0', port=5000, debug=True)
