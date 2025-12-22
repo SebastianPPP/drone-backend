@@ -150,12 +150,14 @@
       <button id="mission-btn">➕ Nowa misja</button>
       <div id="mission-info" style="font-size:0.8rem; color:#666; margin-bottom:5px; min-height:1rem;"></div>
       <button id="clear-mission-btn" style="background:#ddd;" disabled>🗑️ Usuń misję</button>
-      <div class="control-group">
-      <label>Typ misji:</label>
-      <select id="mission-type-select">
-        <option value="lawnmower">Lawnmower (Podział obszaru)</option>
-        <option value="leader-follower">Leader-Follower (Formacja)</option>
-      </select>
+      
+      <div class="control-group" style="margin: 10px 0;">
+        <label style="font-size:0.85rem; font-weight:600; color:#333;">Typ misji:</label>
+        <select id="mission-type-select" style="width:100%; padding:6px; margin-top:4px; border-radius:4px; border:1px solid #ccc;">
+          <option value="lawnmower">Lawnmower (Podział obszaru)</option>
+          <option value="leader-follower">Leader-Follower (Formacja)</option>
+        </select>
+      </div>
       <button id="generate-path-btn" style="background:#1322E6; color:white;">🛫 Generuj trasę</button>
     </div>
   </div>
