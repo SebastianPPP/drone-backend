@@ -319,13 +319,19 @@ function clearMission() {
 }
 
 /* ---------- GENEROWANIE TRASY I PRZYPISYWANIE RÓL ---------- */
+/* ---------- GENEROWANIE TRASY I PRZYPISYWANIE RÓL ---------- */
 function handleGeneratePath() {
   if (!missionPolygon) return alert("Najpierw zaznacz obszar!");
   
-  const numDrones = parseInt(prompt("Liczba dronów?", "1"), 10) || 1;
-  const stepMeters = parseFloat(prompt("Odstęp (m)?", "50")) || 50;
+  const missionType = document.getElementById("mission-type-select").value;
+  const numDrones = parseInt(prompt("Liczba dronów?", "2"), 10) || 2;
   
-  // 1. Obliczenia Turf (Lawnmower)
+  // Dla Leader-Follower wymuszamy min 4m odstępu (ok 0.00004 stopnia)
+  // Ale użytkownik podaje w metrach
+  let defaultStep = missionType === "leader-follower" ? "10" : "50"; 
+  const stepMeters = parseFloat(prompt("Odstęp między liniami (m)?", defaultStep)) || 10;
+  
+  // 1. Obliczenia Turf (Lawnmower) - generowanie ścieżki
   const latlngs = missionPolygon.getLatLngs()[0]; 
   const coords = latlngs.map(p => [p.lng, p.lat]);
   coords.push(coords[0]); 
@@ -350,7 +356,7 @@ function handleGeneratePath() {
   
   if(lines.length === 0) return alert("Błąd generowania (za mały obszar?).");
   
-  // 2. Rysowanie poglądowe
+  // Rysowanie na mapie
   if (window.flightLines) window.flightLines.forEach(l => map.removeLayer(l));
   window.flightLines = [];
   
@@ -360,42 +366,82 @@ function handleGeneratePath() {
     else            { fullPath.push(seg[1]); fullPath.push(seg[0]); }
   });
   
-  // 3. Podział na drony i przypisanie RÓL
+  // --- LOGIKA PRZYDZIAŁU ---
   const newMissionId = "MSN-" + Date.now().toString().slice(-6); 
-  const part = Math.ceil(fullPath.length / numDrones);
-  const colors = ["red", "orange", "purple"];
   const payloadDrones = {};
   
   let activeIds = [...accepted];
-  if (activeIds.length === 0) activeIds = ["drone_1"]; 
+  if (activeIds.length === 0) activeIds = ["sim_drone_1", "sim_drone_2"]; // Domyślne ID do testów
   
-  for(let d=0; d<numDrones; d++) {
-     const slice = fullPath.slice(d*part, (d+1)*part + 1);
-     if(slice.length < 2) continue;
-     
-     const leafletLine = slice.map(pt => [pt[1], pt[0]]);
-     const pl = L.polyline(leafletLine, { color: colors[d % colors.length] }).addTo(map);
-     window.flightLines.push(pl);
-     
-     const targetId = activeIds[d % activeIds.length];
-     const waypoints = slice.map((pt, index) => ({
+  // Zabezpieczenie: jeśli wybrano leader-follower a jest 1 dron
+  if (missionType === "leader-follower" && numDrones < 2) {
+      alert("Tryb Leader-Follower wymaga minimum 2 dronów!");
+      return;
+  }
+
+  if (missionType === "leader-follower") {
+      // --- LOGIKA LEADER-FOLLOWER ---
+      // 1. Leader dostaje CAŁĄ trasę
+      const leaderId = activeIds[0];
+      
+      const leafletLine = fullPath.map(pt => [pt[1], pt[0]]);
+      const pl = L.polyline(leafletLine, { color: "red", weight: 4 }).addTo(map);
+      window.flightLines.push(pl);
+
+      const waypoints = fullPath.map((pt, index) => ({
           seq_id: index,
           lat: pt[1],
           lon: pt[0],
           alt: 20
-     }));
+      }));
 
-     // Logika ról: Pierwszy dron to LEADER, reszta FOLLOWER
-     const assignedRole = (d === 0) ? "leader" : "follower";
+      payloadDrones[leaderId] = {
+          mission_id: newMissionId,
+          waypoints: waypoints,
+          role: "leader"
+      };
 
-     payloadDrones[targetId] = {
-         mission_id: newMissionId,
-         waypoints: waypoints,
-         role: assignedRole // <-- Tu wysyłamy rolę na serwer
-     };
+      // 2. Followerzy dostają pustą trasę i rolę follower
+      for(let d=1; d<numDrones; d++) {
+          const followerId = activeIds[d % activeIds.length];
+          payloadDrones[followerId] = {
+              mission_id: newMissionId,
+              waypoints: [], // Pusta lista punktów, bo podąża za liderem
+              role: "follower"
+          };
+      }
+
+  } else {
+      // --- LOGIKA LAWNMOWER (Klasyczna) ---
+      const part = Math.ceil(fullPath.length / numDrones);
+      const colors = ["red", "orange", "purple", "blue"];
+      
+      for(let d=0; d<numDrones; d++) {
+         const slice = fullPath.slice(d*part, (d+1)*part + 1);
+         if(slice.length < 2) continue;
+         
+         const leafletLine = slice.map(pt => [pt[1], pt[0]]);
+         const pl = L.polyline(leafletLine, { color: colors[d % colors.length] }).addTo(map);
+         window.flightLines.push(pl);
+         
+         const targetId = activeIds[d % activeIds.length];
+         const waypoints = slice.map((pt, index) => ({
+              seq_id: index,
+              lat: pt[1],
+              lon: pt[0],
+              alt: 20
+         }));
+    
+         // Tutaj rola nie ma znaczenia sterującego, ale ustawiamy dla porządku
+         payloadDrones[targetId] = {
+             mission_id: newMissionId,
+             waypoints: waypoints,
+             role: "independent" 
+         };
+      }
   }
   
-  // 4. Wysyłka
+  // Wysyłka
   document.getElementById("mission-info").textContent = "Wgrywanie...";
   
   fetch(API_UPLOAD, {
@@ -406,16 +452,13 @@ function handleGeneratePath() {
   .then(r => r.json())
   .then(d => {
     if(d.status === "STORED") {
-        alert("✅ Misja wgrana! Przypisano role.\nID: " + newMissionId);
+        alert(`✅ Misja wgrana [Tryb: ${missionType}]!\nID: ${newMissionId}`);
         document.getElementById("mission-info").textContent = "Aktywna: " + newMissionId;
     } else {
         alert("Błąd: " + JSON.stringify(d));
     }
   })
-  .catch(e => {
-      console.error(e);
-      alert("Błąd połączenia.");
-  });
+  .catch(e => { console.error(e); alert("Błąd połączenia."); });
 }
 
 /* ---------- INIT ---------- */
