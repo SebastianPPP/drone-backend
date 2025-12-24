@@ -2,10 +2,13 @@ import os
 import json
 import threading
 import time
+import eventlet
 from datetime import datetime
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
 from flask_socketio import SocketIO, emit
+
+eventlet.monkey_patch()
 
 # KONFIGURACJA 
 # Pobieramy zmienne z systemu (Environment Variables) <- na Render!.

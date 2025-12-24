@@ -3,6 +3,6 @@ Flask-SocketIO
 python-socketio
 python-engineio
 gunicorn
-eventlet>=0.33.3
+eventlet==0.33.3
 python-dotenv
 requests
