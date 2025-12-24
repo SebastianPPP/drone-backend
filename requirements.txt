@@ -1,5 +1,8 @@
-gunicorn==20.1.0
-flask       
-flask-socketio
-eventlet
+Flask
+Flask-SocketIO
+python-socketio
+python-engineio
+gunicorn
+eventlet>=0.33.3
 python-dotenv
+requests
