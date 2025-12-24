@@ -3,16 +3,18 @@ import time
 import math
 import numpy as np
 
-# --- CONFIG ---
-BACKEND_URL = "https://drone-backend-2-1mwz.onrender.com/api/telemetry"
-DRONE_ID = "sim_drone_2"
-LEADER_ID = "sim_drone_1"
-START_LAT = 52.1000
-START_LON = 19.2995 
+# --- KONFIGURACJA ---
+BACKEND_URL_DRONES = "https://drone-backend-2-1mwz.onrender.com/api/drones"
+BACKEND_URL_TELEM = "https://drone-backend-2-1mwz.onrender.com/api/telemetry"
 
-TARGET_DISTANCE = 4.0   
-ZONE_RED = 2.5     # Odległość krytyczna (hamowanie awaryjne)
-ZONE_YELLOW = 6.0  # Odległość ostrzegawcza (zaczynamy zwalniać)
+API_KEY = "ZTBdrony"
+DRONE_ID = "follower1"
+LEADER_ID = "skimmer1" 
+START_LAT = 52.2297
+START_LON = 21.0120 
+
+TARGET_DISTANCE = 8.0   
+ZONE_RED = 3.0          
 
 class LocalFrame:
     def __init__(self, lat0, lon0):
@@ -53,14 +55,10 @@ class AdaptiveFuzzyController:
 
         real_dist_to_leader = math.hypot(lx - x, ly - y)
 
-        # --- 1. UNIKANIE KOLIZJI (ODPYCHANIE) ---
-        # Jeśli jesteśmy za blisko lidera (nie wirtualnego punktu, tylko fizycznego drona)
         if real_dist_to_leader < ZONE_RED:
-            # Bardzo mocne "wsteczne" - odpychanie
-            print(f"🚨 KOLIZJA! Hamowanie awaryjne ({real_dist_to_leader:.2f}m)", flush=True)
-            return -300.0, 0.0 
+            # Hamowanie awaryjne
+            return -200.0, 0.0 
 
-        # --- 2. KĄT I FUZZY ---
         desired_psi = math.atan2(ty - y, tx - x)
         e_psi = desired_psi - psi
         e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi)) 
@@ -75,45 +73,25 @@ class AdaptiveFuzzyController:
         fuzzy_comp = np.dot(self.theta, xi)
         torque_z = -self.K_Z * z_r - fuzzy_comp
         
-        # --- 3. PIVOT TURN I PRĘDKOŚĆ ---
-        abs_angle_err = abs(e_psi)
         dist_to_virtual = math.hypot(tx - x, ty - y)
         force_x = 0.0
-        
         MAX_TORQUE = 80.0
         
-        # Jeśli trzeba się mocno obrócić -> Pivot
-        if abs_angle_err > 0.8:
+        if abs(e_psi) > 0.8:
             force_x = 0.0
             MAX_TORQUE = 100.0
-        elif abs_angle_err > 0.35:
-            force_x = 40.0 # Trochę szybciej na zakręcie niż wcześniej
+        elif abs_angle_err := abs(e_psi) > 0.35:
+            force_x = 40.0
             MAX_TORQUE = 60.0
         else:
-            # --- ZMIANA: PRĘDKOŚĆ ---
-            # Follower ma być szybki (do 12 m/s), żeby dogonić Lidera
             desired_speed = 3.5 * dist_to_virtual 
-            desired_speed = min(desired_speed, 12.0) # Max 12 m/s
+            desired_speed = min(desired_speed, 12.0)
             
             force_error = desired_speed - u
-            force_x = 200.0 * force_error # Duża moc silnika
+            force_x = 200.0 * force_error
             MAX_TORQUE = 40.0 
 
         torque_z = max(min(torque_z, MAX_TORQUE), -MAX_TORQUE)
-
-        # --- 4. ZWALNIANIE PRZED KOLIZJĄ (ZONE YELLOW) ---
-        if real_dist_to_leader < ZONE_YELLOW:
-            # Jeśli zbliżamy się do strefy żółtej, drastycznie tniemy gaz
-            # A jeśli lecimy szybko (>3m/s), włączamy hamulec
-            limit = 30.0 * (real_dist_to_leader - ZONE_RED) # Im bliżej, tym mniejszy limit
-            force_x = min(force_x, limit)
-            
-            if u > 4.0: 
-                force_x = -100.0 # Aktywne hamowanie
-
-        force_x = max(-300.0, force_x) # Limit wstecznego
-        force_x = min(force_x, 300.0)  # Limit do przodu
-
         return force_x, torque_z
 
 class PhysicsModel:
@@ -134,34 +112,34 @@ def main():
     logic = AdaptiveFuzzyController()
     physics = PhysicsModel()
 
-    local_x, local_y = -30.0, 0.0 
+    local_x, local_y = -10.0, -10.0 
     yaw = 0.0
     
-    current_data = {
-        "lat": START_LAT, "lon": START_LON, 
-        "role": "follower", "mission_status": "nothing", "mission_id": None
-    }
-    
+    current_data = {"role": "follower", "battery": 95.0}
     dt = 0.1
-    print(f"--- Start FOLLOWER (Speed 12m/s, Anti-Coll) ---", flush=True)
+    headers = {"X-Drone-Token": API_KEY, "Content-Type": "application/json"}
+    
+    print(f"--- Start FOLLOWER: {DRONE_ID} ---", flush=True)
 
     while True:
         leader_state = None
+        
         try:
-            resp = requests.get(BACKEND_URL) 
+            resp = requests.get(BACKEND_URL_DRONES, timeout=2)
             if resp.status_code == 200:
-                all_drones = resp.json()
-                for d in all_drones:
-                    if d['drone_id'] == LEADER_ID:
+                drones = resp.json()
+                for d in drones:
+                    if d.get('drone_id') == LEADER_ID:
                         leader_state = d
                         break
-        except Exception: pass
+        except Exception: 
+            pass
 
         fx, tz = 0.0, 0.0
 
-        if leader_state and current_data["role"] == "follower":
+        if leader_state:
             l_lat, l_lon = leader_state['lat'], leader_state['lon']
-            l_yaw_rad = math.radians(leader_state['yaw'])
+            l_yaw_rad = math.radians(leader_state.get('yaw', 0))
             
             lx, ly = geo.gps_to_xy(l_lat, l_lon)
             
@@ -169,8 +147,11 @@ def main():
             target_y = ly - TARGET_DISTANCE * math.sin(l_yaw_rad)
             
             state = {'x': local_x, 'y': local_y, 'yaw': yaw, 'r': physics.r, 'u': physics.u}
-            # Przekazujemy pozycję lidera (lx, ly) do unikania kolizji
             fx, tz = logic.compute(state, (target_x, target_y), (lx, ly), dt)
+        else:
+            # Brak lidera - HOVER
+            fx = -20.0 * physics.u
+            tz = -10.0 * physics.r
 
         physics.step(fx, tz, dt)
         local_x += physics.u * math.cos(yaw) * dt
@@ -179,23 +160,21 @@ def main():
         yaw = math.atan2(math.sin(yaw), math.cos(yaw))
 
         new_lat, new_lon = geo.xy_to_gps(local_x, local_y)
+        current_data["battery"] = max(0, current_data["battery"] - 0.01)
         
         payload = {
             "drone_id": DRONE_ID,
             "lat": new_lat, "lon": new_lon, "alt": 10,
-            "battery": 90,
+            "battery": round(current_data["battery"], 1),
             "yaw": round(math.degrees(yaw), 2),
-            "role": current_data["role"],
-            "mission_status": ("active", current_data["mission_id"]) if leader_state else ("nothing", None),
-            "next_waypoints": [] 
+            "roll": 0, "pitch": 0,
+            "target_wp": 0 
         }
         
         try:
-            resp = requests.post(BACKEND_URL, json=payload, timeout=1)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "role" in data: current_data["role"] = data["role"]
+            requests.post(BACKEND_URL_TELEM, json=payload, headers=headers, timeout=1)
         except Exception: pass
+        
         time.sleep(dt)
 
 if __name__ == "__main__":

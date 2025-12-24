@@ -1,4 +1,3 @@
-/* ''' GLOBALNE ZMIENNE ''' */
 const socket = io({
     transports: ['websocket'],
     upgrade: false
@@ -161,7 +160,9 @@ function renderEditableMission() {
 
 async function uploadMission() {
     if (!selectedDroneId) { alert("Wybierz drona!"); return; }
-    const payload = { drones: { [selectedDroneId]: { mission_id: "m_"+Date.now(), waypoints: finalWaypoints, role: document.getElementById('mission-type-select').value } } };
+    // GENEROWANIE NOWEGO ID (Kluczowe dla aktualizacji w locie)
+    const newMissionId = "m_" + Date.now();
+    const payload = { drones: { [selectedDroneId]: { mission_id: newMissionId, waypoints: finalWaypoints, role: document.getElementById('mission-type-select').value } } };
     try {
         const res = await fetch('/api/mission/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         if (res.status === 401) location.reload(); 
@@ -180,7 +181,7 @@ async function clearMission() {
     }
 }
 
-// === ZMODYFIKOWANA FUNKCJA AKTUALIZACJI PASKA BOCZNEGO ===
+// === AKTUALIZACJA UI ===
 function updateSidebar(drones) {
     const containers = {
         active: document.getElementById('active-list'),
@@ -206,14 +207,12 @@ function updateSidebar(drones) {
             targetContainer.appendChild(el); 
         }
 
-        // Jeśli element nie istnieje, tworzymy go z nową strukturą
         if (!el) {
             el = document.createElement('div');
             el.id = `item-${d.drone_id}`;
             el.onclick = () => selectDrone(d.drone_id);
             targetContainer.appendChild(el);
             
-            // --- TUTAJ JEST WYGLĄD ITEMU ---
             el.innerHTML = `
                 <div class="item-content">
                     <div style="flex-grow: 1;">
@@ -244,14 +243,11 @@ function updateSidebar(drones) {
         el.dataset.tracked = d.is_tracked;
         el.className = `item ${listType} ${d.drone_id===selectedDroneId?'selected':''}`;
 
-        // Aktualizacja danych w istniejącym elemencie
         el.querySelector('.d-id').innerText = d.drone_id;
         
-        // Kropka statusu Online/Offline
         const dot = el.querySelector('.d-stat-dot');
         dot.style.backgroundColor = d.online ? '#2ecc71' : '#e74c3c';
 
-        // Szczegóły: Misja, Rola, Bateria
         el.querySelector('.d-mission').innerText = d.mission_display || "brak";
         el.querySelector('.d-role').innerText = d.server_assigned_role || "brak";
         
@@ -259,7 +255,6 @@ function updateSidebar(drones) {
         batSpan.innerText = `${d.battery}%`;
         batSpan.style.color = d.battery < 20 ? '#e74c3c' : '#fff';
 
-        // Przycisk akcji (Śmietnik / Plus)
         const btn = el.querySelector('.action-btn');
         if (d.is_tracked) {
             btn.innerText = "🗑️";
@@ -295,7 +290,6 @@ function handleEmptyMessage(container) {
     }
 }
 
-// Zarządzanie dronem
 async function addDrone(id) {
     try {
         await fetch('/api/drone/add', {
@@ -341,7 +335,6 @@ function updateMap(drones) {
                 if (body) body.style.transform = `rotate(${d.yaw}deg)`;
             }
             marker.setOpacity(d.is_tracked ? 1.0 : 0.6);
-            // Uaktualnij popup jeśli jest otwarty
             if (marker.isPopupOpen()) {
                  marker.setPopupContent(`
                     <b>${d.drone_id}</b><br>

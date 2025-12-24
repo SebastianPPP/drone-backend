@@ -3,14 +3,14 @@ import time
 import math
 import numpy as np
 
-# --- CONFIG ---
+# --- KONFIGURACJA ---
 BACKEND_URL = "https://drone-backend-2-1mwz.onrender.com/api/telemetry"
-DRONE_ID = "sim_drone_1"
-START_LAT = 52.1000
-START_LON = 19.3000
+API_KEY = "ZTBdrony"
+DRONE_ID = "skimmer1"
+START_LAT = 52.2297
+START_LON = 21.0122
 
-# Parametry misji
-WP_TOLERANCE = 2.0  # Zmniejszona tolerancja zaliczenia punktu (2 metry)
+WP_TOLERANCE = 3.0  # Metry (zwiększyłem lekko dla płynności)
 
 class LocalFrame:
     def __init__(self, lat0, lon0):
@@ -28,7 +28,7 @@ class LocalFrame:
 
 class AdaptiveFuzzyController:
     def __init__(self):
-        self.K_PSI = 2.5 # Zwiększona precyzja kursu
+        self.K_PSI = 2.5
         self.K_Z = 25.0
         self.ETA = 5.0
         self.num_rules = 11
@@ -64,17 +64,14 @@ class AdaptiveFuzzyController:
 
         fuzzy_comp = np.dot(self.theta, xi)
         torque_z = -self.K_Z * z_r - fuzzy_comp
-        
-        MAX_TORQUE = 100.0 # Bardzo zwrotny
-        torque_z = max(min(torque_z, MAX_TORQUE), -MAX_TORQUE)
+        torque_z = max(min(torque_z, 100.0), -100.0)
 
-        # --- PRĘDKOŚĆ ---
-        # Zwalniamy lekko przed samym punktem, żeby go trafić przy tolerancji 2m
         dist = math.hypot(tx - x, ty - y)
         
-        target_speed = 12.0 # Max prędkość
-        if abs(e_psi) > 0.5: target_speed = 4.0 # Zwolnij na zakręcie
-        if dist < 5.0: target_speed = 5.0 # Zwolnij dolatując do punktu
+        # --- LOGIKA PRĘDKOŚCI ---
+        target_speed = 12.0
+        if abs(e_psi) > 0.5: target_speed = 4.0 # Zwalnia na zakrętach
+        if dist < 15.0: target_speed = 3.0      # Zwalnia przy dolocie
         
         force_x = 250.0 * (target_speed - u)
         force_x = max(0.0, min(300.0, force_x))
@@ -105,86 +102,130 @@ def main():
     local_x, local_y = 0.0, 0.0
     yaw = 0.0
     
+    # Stan drona
     current_data = {
-        "lat": START_LAT, "lon": START_LON, "alt": 10.0, "battery": 100,
+        "lat": START_LAT, "lon": START_LON, "alt": 10.0, "battery": 100.0,
         "roll": 0.0, "pitch": 0.0, "yaw": 0.0,
         "role": "None", "mission_id": None, "mission_status": "nothing",
         "current_wp_index": 0
     }
     
     full_mission_path_xy = []
-    full_mission_path_gps = []
     
     dt = 0.1 
+    headers = {"X-Drone-Token": API_KEY, "Content-Type": "application/json"}
 
-    print(f"--- Start LEADER (Tolerancja {WP_TOLERANCE}m) ---", flush=True)
+    print(f"--- Start LEADER: {DRONE_ID} ---", flush=True)
 
     while True:
         target_xy = None
-        if current_data["mission_status"] == "active" and full_mission_path_xy:
-             target_xy = full_mission_path_xy[current_data["current_wp_index"]]
+        
+        # --- 1. LOGIKA WYBORU CELU ---
+        if current_data["mission_status"] == "active":
+            if full_mission_path_xy and current_data["current_wp_index"] < len(full_mission_path_xy):
+                target_xy = full_mission_path_xy[current_data["current_wp_index"]]
+            else:
+                # KONIEC TRASY -> ZMIANA STANU NA DONE
+                print("🏁 Misja zakończona (osiągnięto ostatni punkt). Czekam.", flush=True)
+                current_data["mission_status"] = "done"
 
+        # --- 2. OBLICZENIA FIZYKI ---
         fx, tz = 0.0, 0.0
         
         if target_xy:
+            # Lecimy do punktu
             state = {'x': local_x, 'y': local_y, 'yaw': yaw, 'r': physics.r, 'u': physics.u}
             fx, tz = logic.compute(state, target_xy, dt)
             
+            # Sprawdzenie zaliczenia punktu
             dist_to_wp = math.hypot(target_xy[0] - local_x, target_xy[1] - local_y)
-            
-            # --- WARUNEK ZALICZENIA PUNKTU ---
             if dist_to_wp < WP_TOLERANCE: 
-                print(f"🎯 Zaliczo WP #{current_data['current_wp_index']} (Dist: {dist_to_wp:.2f}m)", flush=True)
+                print(f"🎯 Zaliczo WP #{current_data['current_wp_index'] + 1}", flush=True)
                 current_data["current_wp_index"] += 1
-                if current_data["current_wp_index"] >= len(full_mission_path_xy):
-                    current_data["mission_status"] = "done"
-
-        physics.step(fx, tz, dt)
+        elif current_data["mission_status"] == "done":
+            # Tryb HOVER (wiszenie) - aktywne hamowanie
+            fx = -20.0 * physics.u  # Hamuj prędkość liniową
+            tz = -10.0 * physics.r  # Hamuj obrót
         
+        # Krok fizyki
+        physics.step(fx, tz, dt)
         local_x += physics.u * math.cos(yaw) * dt
         local_y += physics.u * math.sin(yaw) * dt
         yaw += physics.r * dt
         yaw = math.atan2(math.sin(yaw), math.cos(yaw))
 
+        # Konwersja na GPS
         new_lat, new_lon = geo.xy_to_gps(local_x, local_y)
-        current_data["lat"] = new_lat
-        current_data["lon"] = new_lon
-        current_data["yaw"] = math.degrees(yaw)
-        current_data["battery"] -= 0.02
+        current_data["battery"] = max(0, current_data["battery"] - 0.01)
 
-        next_wps_gps = []
+        # --- 3. WYSYŁANIE TELEMETRII ---
+        # Jeśli misja aktywna, pokazujemy nr WP, jeśli zakończona, pokazujemy "Koniec" (jako np. max+1)
+        wp_display = 0
         if current_data["mission_status"] == "active":
-            idx = current_data["current_wp_index"]
-            next_wps_gps = full_mission_path_gps[idx : idx + 5]
+            wp_display = current_data["current_wp_index"] + 1
+        elif current_data["mission_status"] == "done":
+            wp_display = 999 # Kod dla frontend, że koniec (lub po prostu ostatni znany)
 
         payload = {
             "drone_id": DRONE_ID,
-            "lat": current_data["lat"], "lon": current_data["lon"], "alt": 10,
+            "lat": new_lat, "lon": new_lon, "alt": 10,
             "battery": round(current_data["battery"], 1),
             "roll": 0, "pitch": 0, "yaw": round(math.degrees(yaw), 2),
-            "role": current_data["role"],
-            "mission_status": (current_data["mission_status"], current_data["mission_id"]),
-            "next_waypoints": next_wps_gps
+            "target_wp": wp_display
         }
 
         try:
-            resp = requests.post(BACKEND_URL, json=payload, timeout=1)
+            resp = requests.post(BACKEND_URL, json=payload, headers=headers, timeout=1)
+            
             if resp.status_code == 200:
                 data = resp.json()
-                if "role" in data: current_data["role"] = data["role"]
-                if "mission" in data and data["mission"]:
-                    new_msn = data["mission"]
-                    if new_msn.get("id") != current_data["mission_id"]:
-                        print(f"📜 Nowa misja: {new_msn.get('id')}", flush=True)
-                        current_data["mission_id"] = new_msn.get("id")
-                        full_mission_path_gps = new_msn.get("waypoints")
-                        full_mission_path_xy = []
-                        for wp in full_mission_path_gps:
-                            wx, wy = geo.gps_to_xy(wp['lat'], wp['lon'])
-                            full_mission_path_xy.append((wx, wy))
-                        current_data["current_wp_index"] = 0
+                
+                # --- 4. ODBIÓR NOWEJ MISJI I AKTUALIZACJA W LOCIE ---
+                server_mission = data.get("mission")
+                
+                # Jeśli serwer ma misję, a my mamy inną ID (lub wcale)
+                if server_mission:
+                    msn_id = server_mission.get("id")
+                    if msn_id != current_data["mission_id"]:
+                        print(f"📜 Aktualizacja misji! ID: {msn_id}", flush=True)
+                        current_data["mission_id"] = msn_id
+                        
+                        # Przeliczamy nowe punkty
+                        raw_wps = server_mission.get("waypoints", [])
+                        new_path_xy = []
+                        for wp in raw_wps:
+                            wx, wy = geo.gps_to_xy(wp[0], wp[1])
+                            new_path_xy.append((wx, wy))
+                        
+                        full_mission_path_xy = new_path_xy
                         current_data["mission_status"] = "active"
-        except Exception: pass
+                        
+                        # === SMART RESUME (Znajdź najbliższy punkt) ===
+                        # Zamiast resetować do 0, znajdźmy najbliższy punkt w nowej trasie
+                        best_idx = 0
+                        min_dist = float('inf')
+                        
+                        # Sprawdzamy, który punkt z NOWEJ trasy jest najbliżej obecnej pozycji drona
+                        for i, (wx, wy) in enumerate(full_mission_path_xy):
+                            d = math.hypot(wx - local_x, wy - local_y)
+                            if d < min_dist:
+                                min_dist = d
+                                best_idx = i
+                        
+                        # Ustawiamy cel na ten punkt (lub następny, jeśli jesteśmy bardzo blisko)
+                        current_data["current_wp_index"] = best_idx
+                        print(f"🔄 Wznawiam od punktu #{best_idx + 1} (Najbliższy)", flush=True)
+
+                elif not server_mission and current_data["mission_status"] in ["active", "done"]:
+                     # Użytkownik kliknął STOP
+                     print("🛑 Komenda STOP.", flush=True)
+                     current_data["mission_status"] = "nothing"
+                     current_data["mission_id"] = None
+                     full_mission_path_xy = []
+                     
+        except Exception:
+            pass
+            
         time.sleep(dt)
 
 if __name__ == "__main__":

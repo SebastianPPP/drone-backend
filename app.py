@@ -66,23 +66,26 @@ def push_update_to_clients():
         if d_data.get("telemetry"):
             telem_copy = d_data["telemetry"].copy()
             
-            # --- FORMATOWANIE DLA FRONTENDU ---
-            
-            # 1. Rola (brak/leader/follower/dron)
+            # --- ROLA ---
             role = d_data.get("assigned_role", "None")
             telem_copy["server_assigned_role"] = "brak" if role == "None" else role
             
-            # 2. Status misji: (brak/id_misji) / id_next_waypointa
+            # --- MISJA / WAYPOINT ---
             mission = d_data.get("current_mission")
             target_wp = telem_copy.get("target_wp", 0)
             
             if mission:
-                # Jeśli target_wp > 0 to pokazujemy numer, w przeciwnym razie "-"
-                wp_display = target_wp if target_wp > 0 else "-"
+                # Logika wyświetlania
+                if target_wp == 999:
+                    wp_display = "KONIEC"
+                elif target_wp > 0:
+                    wp_display = str(target_wp)
+                else:
+                    wp_display = "-"
+                
                 telem_copy["mission_display"] = f"{mission['id']} / {wp_display}"
             else:
                 telem_copy["mission_display"] = "brak"
-            # ----------------------------------
 
             telem_copy["online"] = (time.time() - d_data.get("last_seen", 0)) < 15
             telem_copy["is_tracked"] = d_data.get("is_tracked", False)
@@ -90,6 +93,7 @@ def push_update_to_clients():
     
     socketio.emit('telemetry_update', all_drones_snapshot)
 
+# --- Dekoratory ---
 def check_auth(username, password):
     return username == ADMIN_USER and password == ADMIN_PASS
 
@@ -117,10 +121,24 @@ def requires_drone_token(f):
         return f(*args, **kwargs)
     return decorated
 
+# --- ENDPOINTY ---
+
 @app.route("/")
 @requires_auth
 def index():
     return render_template("index.html")
+
+# === NOWY ENDPOINT DLA FOLLOWERA (GET) ===
+# Bez tego Follower nie widzi Lidera!
+@app.route("/api/drones", methods=["GET"])
+def get_all_drones_public():
+    public_list = []
+    for d_id, data in drones_db.items():
+        # Zwracamy tylko drony, które są "żywe" (mają telemetrię)
+        if data.get("telemetry"):
+            public_list.append(data["telemetry"])
+    return jsonify(public_list), 200
+# ==========================================
 
 @app.route("/api/telemetry", methods=["POST"])
 @requires_drone_token
@@ -134,7 +152,7 @@ def receive_telemetry():
         
         entry = get_drone_entry(drone_id)
         
-        # Bezpieczne pobranie numeru WP
+        # Bezpieczne parsowanie numeru WP
         raw_wp = data.get("target_wp", 0)
         try:
             safe_wp = int(raw_wp)
@@ -150,7 +168,7 @@ def receive_telemetry():
             "roll": data.get("roll", 0),
             "pitch": data.get("pitch", 0),
             "yaw": data.get("yaw", 0),
-            "target_wp": safe_wp,  # Zapisujemy, do którego punktu leci
+            "target_wp": safe_wp,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         entry["last_seen"] = time.time()
