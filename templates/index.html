@@ -2,190 +2,126 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
-  <title>Drony – Panel Sterowania</title>
+  <title>Drony – Panel GCS</title>
   
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
   <style>
-    /* --- BAZA --- */
-    *{box-sizing:border-box}
-    body{margin:0;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;display:flex;height:100vh;background:#2a2a2a;overflow:hidden;}
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; background: #2a2a2a; overflow: hidden; }
     
-    /* --- SIDEBAR --- */
-    #sidebar{width:280px;background:#ffffff;border-right:2px solid #1322E6;padding:15px;overflow-y:auto;box-shadow:2px 0 8px rgba(19,34,230,0.3); z-index: 2000;}
-    #sidebar h3{margin:12px 0 8px;font-size:1rem;color:#1322E6;border-bottom:2px solid #1322E6;padding-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
+    #sidebar { width: 280px; background: #fff; border-right: 1px solid #ccc; padding: 15px; overflow-y: auto; z-index: 2000; display: flex; flex-direction: column; }
+    #sidebar h3 { margin: 15px 0 8px; font-size: 0.85rem; color: #1322E6; border-bottom: 2px solid #1322E6; text-transform: uppercase; }
     
-    .item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:6px;border-left:4px solid transparent;transition:all 0.2s;color:#333; background: #f4f4f4;}
-    .item:hover{background:rgba(19, 33, 230, 0.1);transform:translateX(4px)}
-    .item.active{border-left-color:#1322E6;color:#1322E6;font-weight:bold}
-    .item.inactive{border-left-color:#c62828;color:#c62828}
-    .item.detected{border-left-color:#757575;color:#666}
-    .item.selected{outline: 2px solid #1322E6; background: rgba(19, 34, 230, 0.1);}
-    
-    .sidebar-control { margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px; }
-    .sidebar-control button { width: 100%; padding: 8px; margin-bottom: 5px; cursor: pointer; }
-    .btn-action { float: right; cursor: pointer; font-size: 0.8em; }
-
-    /* --- MAPA --- */
-    #map{flex:1; z-index: 1;}
-
-    /* --- HUD / ZEGARY (Nowe style) --- */
-    #gauges-container {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      display: flex;
-      flex-direction: column; /* Ustawienie pionowe */
-      gap: 15px;
-      z-index: 1000;
-      pointer-events: none; /* Klikanie "przez" zegary w mapę */
-      /* display: none; -> Odkomentuj jeśli chcesz ukryć domyślnie, JS to pokaże */
+    .item { 
+        padding: 10px; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        margin-bottom: 5px; 
+        background: #f8f9fa; 
+        font-size: 0.9rem; 
+        border-left: 4px solid transparent; 
+        transition: all 0.15s ease-out;
     }
-    
-    .gauge {
-      width: 150px;
-      height: 150px;
-      background-color: rgba(0, 0, 0, 0.8);
-      border-radius: 50%;
-      border: 3px solid #555;
-      position: relative;
-      overflow: hidden; /* Ukrywa wszystko co wychodzi poza kółko */
-      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    .item-content { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+
+    .item:hover { 
+        background: #eef0ff; 
+        border-left-width: 12px; 
     }
 
-    /* --- SZTUCZNY HORYZONT --- */
+    .item.active { border-left-color: #28a745; font-weight: 600; } 
+    .item.inactive { border-left-color: #c62828; color: #666; } 
+    .item.detected { border-left-color: #ff9800; color: #555; background: #fff8e1; } 
+    
+    .item.selected { 
+        background: #e6e8ff; 
+        border-left-width: 12px; 
+        border-left-color: #1322E6;
+    }
+
+    .list-btn { background: none; border: none; font-size: 1.1rem; cursor: pointer; padding: 0 5px; margin-left: 5px; transition: transform 0.2s; }
+    .list-btn:hover { transform: scale(1.2); }
+    .btn-delete { color: #aaa; }
+    .btn-delete:hover { color: #dc3545; }
+    .btn-add { color: #28a745; font-weight: bold; }
+    .btn-add:hover { color: #1e7e34; }
+
+    .sidebar-control { margin-top: auto; border-top: 1px solid #eee; padding-top: 15px; }
+    button { width: 100%; padding: 10px; margin-bottom: 8px; cursor: pointer; border: none; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
+    #mission-btn { background: #28a745; color: white; }
+    #generate-path-btn { background: #1322E6; color: white; }
+    #clear-mission-btn { background: #dc3545; color: white; opacity: 0.5; }
+    #clear-mission-btn:enabled { opacity: 1; }
+    
+    #map { flex: 1; z-index: 1; background: #222; }
+     
+    #gauges-container { position: absolute; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 1000; pointer-events: none; transition: opacity 0.3s; }
+    .hidden { opacity: 0; }
+    .gauge { width: 140px; height: 140px; background-color: rgba(15, 15, 15, 0.85); border-radius: 50%; border: 3px solid #555; position: relative; overflow: hidden; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
     #attitude-indicator { background: #333; }
-    
-    /* Ruchome tło (Niebo/Ziemia) */
-    #horizon-gradient {
-      position: absolute;
-      top: -50%; 
-      left: -50%;
-      width: 200%; /* Musi być duże, żeby przy obrocie nie brakło tła */
-      height: 200%;
-      background: linear-gradient(to bottom, #3ebfff 50%, #8b4513 50%);
-      transition: transform 0.1s linear; /* Płynny ruch */
-      z-index: 1;
-    }
-
-    /* Biała kreska horyzontu (rusza się z tłem) */
-    .horizon-line {
-      position: absolute;
-      top: 50%; left: 0; width: 100%; height: 2px;
-      background: rgba(255,255,255,0.7);
-    }
-
-    /* Żółty celownik (stały) */
-    #crosshair {
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      width: 40px; height: 2px; background: yellow;
-      z-index: 10;
-      box-shadow: 0 1px 2px black;
-    }
-    #crosshair::after {
-      content: ''; position: absolute; top: -5px; left: 50%;
-      width: 2px; height: 10px; background: yellow;
-      transform: translateX(-50%);
-    }
-
-    /* Tekst wewnątrz zegara */
-    .hud-text {
-      position: absolute; bottom: 15%; width: 100%;
-      text-align: center; font-family: monospace; font-size: 11px;
-      color: #0f0; text-shadow: 1px 1px 0 #000; z-index: 20;
-    }
-
-    /* --- KOMPAS --- */
-    #compass {
-      background: rgba(20, 20, 20, 0.9);
-      color: white; font-weight: bold;
-    }
+    #horizon-gradient { position: absolute; top: -100%; left: -100%; width: 300%; height: 300%; background: linear-gradient(to bottom, #00bfff 50%, #8b4513 50%); transition: transform 0.05s linear; z-index: 1; }
+    .horizon-line { position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.8); }
+    #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 40px; height: 2px; background: #ffff00; z-index: 10; }
+    #crosshair::after { content: ''; position: absolute; top: -6px; left: 50%; width: 2px; height: 12px; background: #ffff00; transform: translateX(-50%); }
+    #compass { background: rgba(20, 20, 20, 0.9); color: white; }
     .compass-rose { width: 100%; height: 100%; position: relative; }
-    
-    .compass-label { position: absolute; font-size: 12px; color: #aaa; }
-    .label-n { top: 5px; left: 50%; transform: translateX(-50%); color: red; font-weight: 900; }
-    .label-e { right: 8px; top: 50%; transform: translateY(-50%); }
-    .label-s { bottom: 5px; left: 50%; transform: translateX(-50%); }
-    .label-w { left: 8px; top: 50%; transform: translateY(-50%); }
-
-    /* Igła kompasu */
-    .compass-needle {
-      position: absolute;
-      top: 50%; left: 50%;
-      width: 4px; height: 45%;
-      background: red;
-      transform-origin: bottom center; /* Obrót wokół dolnej krawędzi */
-      transform: translate(-50%, -100%) rotate(0deg); /* Startowa pozycja */
-      transition: transform 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
-      z-index: 5;
-      border: 1px solid rgba(0,0,0,0.3);
-    }
-    .compass-center-dot {
-       position: absolute; top: 50%; left: 50%;
-       width: 6px; height: 6px; background: white;
-       border-radius: 50%; transform: translate(-50%, -50%);
-       z-index: 6;
-    }
+    .compass-label { position: absolute; font-size: 12px; color: #aaa; font-family: monospace; }
+    .label-n { top: 8px; left: 50%; transform: translateX(-50%); color: #ff4444; }
+    .label-e { right: 10px; top: 50%; transform: translateY(-50%); }
+    .label-s { bottom: 8px; left: 50%; transform: translateX(-50%); }
+    .label-w { left: 10px; top: 50%; transform: translateY(-50%); }
+    .compass-needle { position: absolute; bottom: 50%; left: 50%; width: 4px; height: 35%; background: #ff4444; transform-origin: bottom center; transition: transform 0.1s cubic-bezier(0.25, 1, 0.5, 1); z-index: 5; }
+    .hud-text { position: absolute; bottom: 15%; width: 100%; text-align: center; font-family: monospace; font-size: 11px; color: #0f0; text-shadow: 1px 1px 0 #000; z-index: 20; }
   </style>
 </head>
 <body>
-
   <div id="sidebar">
     <h3>Aktywne</h3>
-    <div id="active-list"><em>Brak</em></div>
-
-    <h3>Nieaktywne</h3>
-    <div id="inactive-list"><em>Brak</em></div>
-
-    <h3>Wykryte</h3>
-    <div id="detected-list"><em>Brak</em></div>
-
-    <div class="sidebar-control">
-      <button id="mission-btn">➕ Nowa misja</button>
-      <div id="mission-info" style="font-size:0.8rem; color:#666; margin-bottom:5px; min-height:1rem;"></div>
-      <button id="clear-mission-btn" style="background:#ddd;" disabled>🗑️ Usuń misję</button>
+    <div id="active-list"></div> <h3>Nieaktywne</h3>
+    <div id="inactive-list"></div> <h3>Wykryte</h3>
+    <div id="detected-list"></div> <div class="sidebar-control">
+      <div id="mission-info" style="font-size:0.8rem; color:#666; margin-bottom:5px;"></div>
       
-      <div class="control-group" style="margin: 10px 0;">
-        <label style="font-size:0.85rem; font-weight:600; color:#333;">Typ misji:</label>
-        <select id="mission-type-select" style="width:100%; padding:6px; margin-top:4px; border-radius:4px; border:1px solid #ccc;">
-          <option value="lawnmower">Lawnmower (Podział obszaru)</option>
-          <option value="leader-follower">Leader-Follower (Formacja)</option>
+      <div class="control-group">
+        <label style="font-size:0.75rem; font-weight:bold; color:#555;">Typ misji:</label>
+        <select id="mission-type-select" style="width:100%; padding:5px; margin-top:5px;">
+          <option value="lawnmower">Lawnmower (Obszar)</option>
+          <option value="waypoints">Waypoints (Trasa)</option>
         </select>
       </div>
-      <button id="generate-path-btn" style="background:#1322E6; color:white;">🛫 Generuj trasę</button>
+
+      <div id="density-control" style="margin: 10px 0; padding: 10px; background: #f0f0f0; display:none;">
+        <label style="font-size:0.75rem; font-weight:bold;">Odstęp (m):</label>
+        <input type="number" id="scan-distance" min="5" value="20" style="width:100%;">
+      </div>
+
+      <button id="mission-btn">Nowa misja</button>
+      <button id="generate-path-btn">Generuj trasę</button>
+      <button id="clear-mission-btn" disabled>Usuń misję</button>
     </div>
   </div>
 
   <div id="map"></div>
 
-  <div id="gauges-container">
-    
+  <div id="gauges-container" class="hidden">
     <div id="attitude-indicator" class="gauge">
-      <div id="horizon-gradient">
-        <div class="horizon-line"></div>
-      </div>
+      <div id="horizon-gradient"><div class="horizon-line"></div></div>
       <div id="crosshair"></div>
       <div class="hud-text" id="hud-roll-pitch">R: 0° P: 0°</div>
     </div>
-
     <div id="compass" class="gauge">
       <div class="compass-rose">
-        <span class="compass-label label-n">N</span>
-        <span class="compass-label label-e">E</span>
-        <span class="compass-label label-s">S</span>
-        <span class="compass-label label-w">W</span>
+        <span class="compass-label label-n">N</span><span class="compass-label label-e">E</span><span class="compass-label label-s">S</span><span class="compass-label label-w">W</span>
         <div class="compass-needle" id="compass-needle-el"></div>
-        <div class="compass-center-dot"></div>
       </div>
       <div class="hud-text" id="hud-yaw" style="bottom: 10px;">HDG: 0°</div>
     </div>
-
   </div>
 
   <script src="{{ url_for('static', filename='js/script.js') }}"></script>

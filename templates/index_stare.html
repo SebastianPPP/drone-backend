@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Drony – Panel Sterowania</title>
+  
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    
+    body { 
+      margin: 0; 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      display: flex; 
+      height: 100vh; 
+      background: #2a2a2a; 
+      overflow: hidden; 
+    }
+    
+    #sidebar {
+      width: 280px;
+      background: #ffffff;
+      border-right: 1px solid #ccc;
+      padding: 15px;
+      overflow-y: auto; 
+      box-shadow: 4px 0 15px rgba(0,0,0,0.3); 
+      z-index: 2000; 
+      display: flex;
+      flex-direction: column;
+    }
+
+    #sidebar h3 {
+      margin: 15px 0 8px;
+      font-size: 0.85rem;
+      color: #1322E6;
+      border-bottom: 2px solid #1322E6;
+      padding-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 700;
+    }
+    
+    .item {
+      padding: 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-bottom: 5px;
+      border-left: 4px solid transparent; 
+      transition: all 0.2s;
+      color: #333; 
+      background: #f8f9fa;
+      font-size: 0.9rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    .item:hover { background: #eef0ff; transform: translateX(3px); }
+    
+    .item.active { border-left-color: #1322E6; color: #000; font-weight: 600; } 
+    .item.inactive { border-left-color: #c62828; color: #666; opacity: 0.8; } 
+    .item.detected { border-left-color: #ff9800; color: #444; } 
+    .item.selected { outline: 2px solid #1322E6; background: #e6e8ff; } 
+    
+    .sidebar-control { 
+      margin-top: auto; 
+      border-top: 1px solid #eee; 
+      padding-top: 15px; 
+    }
+    
+    .sidebar-control button {
+      width: 100%; 
+      padding: 10px; 
+      margin-bottom: 8px; 
+      cursor: pointer; 
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      transition: background 0.2s, transform 0.1s;
+      text-transform: uppercase;
+    }
+    .sidebar-control button:active { transform: scale(0.98); } 
+    
+    #mission-btn { background: #28a745; color: white; } 
+    #mission-btn:hover { background: #218838; }
+
+    #clear-mission-btn { background: #dc3545; color: white; opacity: 0.5; cursor: not-allowed; } 
+    #clear-mission-btn:enabled { opacity: 1; cursor: pointer; }
+    #clear-mission-btn:enabled:hover { background: #c82333; }
+
+    #generate-path-btn { background: #1322E6; color: white; } 
+    #generate-path-btn:hover { background: #0f1bc0; }
+
+    #mission-type-select {
+      width: 100%;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: white;
+      margin-top: 5px;
+    }
+
+    #map { 
+        flex: 1; 
+        z-index: 1; 
+        background: #222; 
+    }
+
+    #gauges-container {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column; 
+      gap: 15px;
+      z-index: 1000; 
+      pointer-events: none; 
+      transition: opacity 0.3s;
+    }
+    
+    .hidden { opacity: 0; }
+
+    .gauge {
+      width: 140px;
+      height: 140px;
+      background-color: rgba(15, 15, 15, 0.85);
+      border-radius: 50%;
+      border: 3px solid #555;
+      position: relative;
+      overflow: hidden; 
+      box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    }
+
+    #attitude-indicator { background: #333; }
+    
+    #horizon-gradient {
+      position: absolute;
+      top: -100%; 
+      left: -100%;
+      width: 300%; 
+      height: 300%; 
+      background: linear-gradient(to bottom, #00bfff 50%, #8b4513 50%);
+      transition: transform 0.1s linear; 
+      z-index: 1;
+    }
+
+    .horizon-line {
+      position: absolute; top: 50%; left: 0; width: 100%; height: 2px;
+      background: rgba(255,255,255,0.8);
+      box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    }
+
+    #crosshair {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px; height: 2px; background: #ffff00;
+      z-index: 10;
+      box-shadow: 0 1px 2px black;
+    }
+    #crosshair::after { 
+      content: ''; position: absolute; top: -6px; left: 50%;
+      width: 2px; height: 12px; background: #ffff00;
+      transform: translateX(-50%);
+    }
+
+    #compass {
+      background: rgba(20, 20, 20, 0.9);
+      color: white; font-weight: bold;
+    }
+    .compass-rose { width: 100%; height: 100%; position: relative; }
+    
+    .compass-label { position: absolute; font-size: 12px; color: #aaa; font-family: monospace; }
+    .label-n { top: 8px; left: 50%; transform: translateX(-50%); color: #ff4444; font-size: 14px; }
+    .label-e { right: 10px; top: 50%; transform: translateY(-50%); }
+    .label-s { bottom: 8px; left: 50%; transform: translateX(-50%); }
+    .label-w { left: 10px; top: 50%; transform: translateY(-50%); }
+
+    .compass-needle {
+      position: absolute;
+      bottom: 50%; left: 50%; 
+      width: 4px; height: 35%;
+      background: #ff4444;
+      transform-origin: bottom center; 
+      transform: translateX(-50%) rotate(0deg); 
+      transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1); 
+      z-index: 5;
+      border: 1px solid rgba(0,0,0,0.3);
+      border-radius: 2px 2px 0 0;
+    }
+    .compass-center-dot {
+       position: absolute; top: 50%; left: 50%;
+       width: 8px; height: 8px; background: white;
+       border-radius: 50%; transform: translate(-50%, -50%);
+       z-index: 6;
+       box-shadow: 0 1px 3px black;
+    }
+
+    .hud-text {
+      position: absolute; bottom: 15%; width: 100%;
+      text-align: center; font-family: 'Consolas', monospace; font-size: 11px;
+      color: #0f0; text-shadow: 1px 1px 0 #000; z-index: 20;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <h3>Aktywne</h3>
+    <div id="active-list"><em>Szukanie...</em></div>
+
+    <h3>Nieaktywne</h3>
+    <div id="inactive-list"><em>Brak</em></div>
+
+    <h3>Wykryte</h3>
+    <div id="detected-list"><em>Brak</em></div>
+
+    <div class="sidebar-control">
+      <div id="mission-info" style="font-size:0.8rem; color:#666; margin-bottom:5px; min-height:1rem;"></div>
+      
+      <div class="control-group" style="margin-bottom: 15px;">
+        <label style="font-size:0.75rem; font-weight:700; color:#555; text-transform:uppercase;">Typ misji:</label>
+        <select id="mission-type-select">
+          <option value="lawnmower">Lawnmower</option>
+          <option value="waypoints">Punkty</option> 
+        </select>
+      </div>
+
+      <div id="density-control" style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 4px; display:none;">
+        <label style="font-size:0.75rem; font-weight:700; color:#555;">Odstęp (metry):</label>
+        
+        <input type="number" id="scan-distance" min="5" value="20" step="1" 
+               style="width:100%; padding: 5px; margin-top:5px; border:1px solid #ccc; border-radius:3px;">
+        
+        <div style="font-size:0.7rem; color:#666; margin-top:2px;">
+          Min: 5m
+        </div>
+      </div>
+
+      <button id="mission-btn">Nowa misja</button>
+      <button id="generate-path-btn">Generuj trasę</button>
+      <button id="clear-mission-btn" disabled>Usuń misję</button>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="gauges-container" class="hidden">
+    
+    <div id="attitude-indicator" class="gauge">
+      <div id="horizon-gradient">
+        <div class="horizon-line"></div>
+      </div>
+      <div id="crosshair"></div>
+      <div class="hud-text" id="hud-roll-pitch">R: 0° P: 0°</div>
+    </div>
+
+    <div id="compass" class="gauge">
+      <div class="compass-rose">
+        <span class="compass-label label-n">N</span>
+        <span class="compass-label label-e">E</span>
+        <span class="compass-label label-s">S</span>
+        <span class="compass-label label-w">W</span>
+        <div class="compass-needle" id="compass-needle-el"></div>
+        <div class="compass-center-dot"></div>
+      </div>
+      <div class="hud-text" id="hud-yaw" style="bottom: 10px;">HDG: 0°</div>
+    </div>
+
+  </div>
+
+  <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+    "skimmer1": {
+        "telemetry": {
+            "drone_id": "skimmer1",
+            "lat": 0,
+            "lon": 0,
+            "alt": 0,
+            "battery": 0,
+            "roll": 0.0,
+            "pitch": 0.0,
+            "yaw": 0.0,
+            "role": "Auto",
+            "mission_status": "idle",
+            "next_waypoints": [],
+            "timestamp": "2025-12-24T01:24:54.514848Z"
+        },
+        "assigned_role": "None",
+        "current_mission": null,
+        "last_seen": 1766539494.5148728,
+        "is_tracked": true
+    }
+}

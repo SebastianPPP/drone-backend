@@ -8,11 +8,11 @@ BACKEND_URL = "https://drone-backend-2-1mwz.onrender.com/api/telemetry"
 DRONE_ID = "sim_drone_2"
 LEADER_ID = "sim_drone_1"
 START_LAT = 52.1000
-START_LON = 19.2995 # Startuje 30m na zachód
+START_LON = 19.2995 
 
-TARGET_DISTANCE = 4.0   # Z pliku fuzzyFollower_tuned.py (zwiększone z 2.5 na 4.0 zgodnie z prośbą)
-ZONE_RED = 2.0          
-ZONE_YELLOW = 3.5 
+TARGET_DISTANCE = 4.0   
+ZONE_RED = 2.5     # Odległość krytyczna (hamowanie awaryjne)
+ZONE_YELLOW = 6.0  # Odległość ostrzegawcza (zaczynamy zwalniać)
 
 class LocalFrame:
     def __init__(self, lat0, lon0):
@@ -28,11 +28,10 @@ class LocalFrame:
         lon = self.lon0 + (x / (self.R * np.cos(self.lat0 * np.pi/180))) * (180/np.pi)
         return lat, lon
 
-# --- LOGIKA Z PLIKU fuzzyFollower_tuned.py ---
 class AdaptiveFuzzyController:
     def __init__(self):
-        self.K_PSI = 1.5   
-        self.K_Z = 10.0    
+        self.K_PSI = 2.5   
+        self.K_Z = 20.0    
         self.ETA = 2.0     
         self.num_rules = 11
         self.centers = np.linspace(-2.0, 2.0, self.num_rules)
@@ -54,16 +53,18 @@ class AdaptiveFuzzyController:
 
         real_dist_to_leader = math.hypot(lx - x, ly - y)
 
-        # 1. HAMOWANIE AWARYJNE
+        # --- 1. UNIKANIE KOLIZJI (ODPYCHANIE) ---
+        # Jeśli jesteśmy za blisko lidera (nie wirtualnego punktu, tylko fizycznego drona)
         if real_dist_to_leader < ZONE_RED:
-            return -80.0, 0.0
+            # Bardzo mocne "wsteczne" - odpychanie
+            print(f"🚨 KOLIZJA! Hamowanie awaryjne ({real_dist_to_leader:.2f}m)", flush=True)
+            return -300.0, 0.0 
 
-        # 2. KĄT
+        # --- 2. KĄT I FUZZY ---
         desired_psi = math.atan2(ty - y, tx - x)
         e_psi = desired_psi - psi
         e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi)) 
 
-        # 3. FUZZY LOGIC
         alpha_r = self.K_PSI * e_psi
         z_r = r - alpha_r
         xi = self._fuzzy_basis(z_r)
@@ -74,42 +75,53 @@ class AdaptiveFuzzyController:
         fuzzy_comp = np.dot(self.theta, xi)
         torque_z = -self.K_Z * z_r - fuzzy_comp
         
-        # 4. PIVOT LOGIC (To co chciałeś zachować!)
+        # --- 3. PIVOT TURN I PRĘDKOŚĆ ---
         abs_angle_err = abs(e_psi)
         dist_to_virtual = math.hypot(tx - x, ty - y)
         force_x = 0.0
         
-        MAX_TORQUE = 40.0
-        if abs_angle_err > 0.8: # > 45 st -> PIVOT
+        MAX_TORQUE = 80.0
+        
+        # Jeśli trzeba się mocno obrócić -> Pivot
+        if abs_angle_err > 0.8:
             force_x = 0.0
-            MAX_TORQUE = 40.0
+            MAX_TORQUE = 100.0
         elif abs_angle_err > 0.35:
-            force_x = 15.0
-            MAX_TORQUE = 30.0
+            force_x = 40.0 # Trochę szybciej na zakręcie niż wcześniej
+            MAX_TORQUE = 60.0
         else:
-            desired_speed = 1.2 * dist_to_virtual
-            desired_speed = min(desired_speed, 2.0)
+            # --- ZMIANA: PRĘDKOŚĆ ---
+            # Follower ma być szybki (do 12 m/s), żeby dogonić Lidera
+            desired_speed = 3.5 * dist_to_virtual 
+            desired_speed = min(desired_speed, 12.0) # Max 12 m/s
+            
             force_error = desired_speed - u
-            force_x = 50.0 * force_error
-            MAX_TORQUE = 20.0 
+            force_x = 200.0 * force_error # Duża moc silnika
+            MAX_TORQUE = 40.0 
 
         torque_z = max(min(torque_z, MAX_TORQUE), -MAX_TORQUE)
 
-        # Strefy bezpieczeństwa
+        # --- 4. ZWALNIANIE PRZED KOLIZJĄ (ZONE YELLOW) ---
         if real_dist_to_leader < ZONE_YELLOW:
-            force_x = min(force_x, 15.0)
-            if u > 0.5: force_x = -20.0
-        else:
-            force_x = min(force_x, 70.0) 
+            # Jeśli zbliżamy się do strefy żółtej, drastycznie tniemy gaz
+            # A jeśli lecimy szybko (>3m/s), włączamy hamulec
+            limit = 30.0 * (real_dist_to_leader - ZONE_RED) # Im bliżej, tym mniejszy limit
+            force_x = min(force_x, limit)
+            
+            if u > 4.0: 
+                force_x = -100.0 # Aktywne hamowanie
 
-        force_x = max(-80.0, force_x)
+        force_x = max(-300.0, force_x) # Limit wstecznego
+        force_x = min(force_x, 300.0)  # Limit do przodu
+
         return force_x, torque_z
 
 class PhysicsModel:
     def __init__(self):
         self.u, self.r = 0.0, 0.0
         self.m, self.I = 20.0, 5.0
-        self.drag_u, self.drag_r = 2.0, 2.0
+        self.drag_u = 0.5 
+        self.drag_r = 2.0
     def step(self, fx, tz, dt):
         acc_u = (fx - self.drag_u * self.u) / self.m
         acc_r = (tz - self.drag_r * self.r) / self.I
@@ -118,11 +130,11 @@ class PhysicsModel:
         return self.u, self.r
 
 def main():
-    geo = LocalFrame(START_LAT, START_LON) # Wspólny układ odniesienia
+    geo = LocalFrame(START_LAT, START_LON)
     logic = AdaptiveFuzzyController()
     physics = PhysicsModel()
 
-    local_x, local_y = -30.0, 0.0 # Startuje przesunięty
+    local_x, local_y = -30.0, 0.0 
     yaw = 0.0
     
     current_data = {
@@ -131,13 +143,12 @@ def main():
     }
     
     dt = 0.1
-    print(f"--- Start FOLLOWER ({DRONE_ID}) ---", flush=True)
+    print(f"--- Start FOLLOWER (Speed 12m/s, Anti-Coll) ---", flush=True)
 
     while True:
-        # 1. Pobierz dane Lidera z API
         leader_state = None
         try:
-            resp = requests.get(BACKEND_URL) # Pobiera listę wszystkich dronów
+            resp = requests.get(BACKEND_URL) 
             if resp.status_code == 200:
                 all_drones = resp.json()
                 for d in all_drones:
@@ -149,29 +160,24 @@ def main():
         fx, tz = 0.0, 0.0
 
         if leader_state and current_data["role"] == "follower":
-            # Konwersja Lidera GPS -> XY
             l_lat, l_lon = leader_state['lat'], leader_state['lon']
             l_yaw_rad = math.radians(leader_state['yaw'])
             
             lx, ly = geo.gps_to_xy(l_lat, l_lon)
             
-            # Wirtualny cel za liderem (TARGET_DISTANCE = 4m)
             target_x = lx - TARGET_DISTANCE * math.cos(l_yaw_rad)
             target_y = ly - TARGET_DISTANCE * math.sin(l_yaw_rad)
             
             state = {'x': local_x, 'y': local_y, 'yaw': yaw, 'r': physics.r, 'u': physics.u}
-            
-            # Obliczenie sterowania z uwzględnieniem pozycji lidera (unikanie)
+            # Przekazujemy pozycję lidera (lx, ly) do unikania kolizji
             fx, tz = logic.compute(state, (target_x, target_y), (lx, ly), dt)
 
-        # 2. Fizyka
         physics.step(fx, tz, dt)
         local_x += physics.u * math.cos(yaw) * dt
         local_y += physics.u * math.sin(yaw) * dt
         yaw += physics.r * dt
         yaw = math.atan2(math.sin(yaw), math.cos(yaw))
 
-        # 3. GPS i Wysyłka
         new_lat, new_lon = geo.xy_to_gps(local_x, local_y)
         
         payload = {
@@ -181,17 +187,15 @@ def main():
             "yaw": round(math.degrees(yaw), 2),
             "role": current_data["role"],
             "mission_status": ("active", current_data["mission_id"]) if leader_state else ("nothing", None),
-            "next_waypoints": [] # Follower nie ma waypointów, goni punkt wirtualny
+            "next_waypoints": [] 
         }
         
-        # Wysyłka własnej pozycji i odbiór roli
         try:
             resp = requests.post(BACKEND_URL, json=payload, timeout=1)
             if resp.status_code == 200:
                 data = resp.json()
                 if "role" in data: current_data["role"] = data["role"]
         except Exception: pass
-
         time.sleep(dt)
 
 if __name__ == "__main__":
