@@ -180,6 +180,7 @@ async function clearMission() {
     }
 }
 
+// === ZMODYFIKOWANA FUNKCJA AKTUALIZACJI PASKA BOCZNEGO ===
 function updateSidebar(drones) {
     const containers = {
         active: document.getElementById('active-list'),
@@ -205,19 +206,29 @@ function updateSidebar(drones) {
             targetContainer.appendChild(el); 
         }
 
+        // Jeśli element nie istnieje, tworzymy go z nową strukturą
         if (!el) {
             el = document.createElement('div');
             el.id = `item-${d.drone_id}`;
             el.onclick = () => selectDrone(d.drone_id);
             targetContainer.appendChild(el);
             
+            // --- TUTAJ JEST WYGLĄD ITEMU ---
             el.innerHTML = `
                 <div class="item-content">
                     <div style="flex-grow: 1;">
-                        <strong class="d-id"></strong> <small class="d-stat"></small><br>
-                        <span class="d-info" style="font-size:0.85em"></span>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <strong class="d-id" style="font-size:1.1em"></strong> 
+                            <span class="d-stat-dot" style="height:10px; width:10px; border-radius:50%; display:inline-block;"></span>
+                        </div>
+                        
+                        <div style="font-size:0.85em; margin-top:4px; line-height:1.4; color:#ccc;">
+                            <div>Status misji: <span class="d-mission" style="color:#fff"></span></div>
+                            <div>Rola: <span class="d-role" style="color:#fff"></span></div>
+                            <div>Bateria: <span class="d-bat" style="color:#fff"></span></div>
+                        </div>
                     </div>
-                    <button class="list-btn action-btn"></button>
+                    <button class="list-btn action-btn" style="margin-left:10px;"></button>
                 </div>
             `;
             
@@ -233,10 +244,22 @@ function updateSidebar(drones) {
         el.dataset.tracked = d.is_tracked;
         el.className = `item ${listType} ${d.drone_id===selectedDroneId?'selected':''}`;
 
+        // Aktualizacja danych w istniejącym elemencie
         el.querySelector('.d-id').innerText = d.drone_id;
-        el.querySelector('.d-stat').innerText = `(${d.online?'On':'Off'})`;
-        el.querySelector('.d-info').innerText = `Bat: ${d.battery}%`;
+        
+        // Kropka statusu Online/Offline
+        const dot = el.querySelector('.d-stat-dot');
+        dot.style.backgroundColor = d.online ? '#2ecc71' : '#e74c3c';
 
+        // Szczegóły: Misja, Rola, Bateria
+        el.querySelector('.d-mission').innerText = d.mission_display || "brak";
+        el.querySelector('.d-role').innerText = d.server_assigned_role || "brak";
+        
+        const batSpan = el.querySelector('.d-bat');
+        batSpan.innerText = `${d.battery}%`;
+        batSpan.style.color = d.battery < 20 ? '#e74c3c' : '#fff';
+
+        // Przycisk akcji (Śmietnik / Plus)
         const btn = el.querySelector('.action-btn');
         if (d.is_tracked) {
             btn.innerText = "🗑️";
@@ -318,9 +341,19 @@ function updateMap(drones) {
                 if (body) body.style.transform = `rotate(${d.yaw}deg)`;
             }
             marker.setOpacity(d.is_tracked ? 1.0 : 0.6);
+            // Uaktualnij popup jeśli jest otwarty
+            if (marker.isPopupOpen()) {
+                 marker.setPopupContent(`
+                    <b>${d.drone_id}</b><br>
+                    Misja: ${d.mission_display || '-'}<br>
+                    Rola: ${d.server_assigned_role || '-'}<br>
+                    Bat: ${d.battery}%
+                 `);
+            }
         } else {
             const m = L.marker([d.lat, d.lon], { icon: createDroneIcon('#007bff') }).addTo(map);
-            m.on('click', () => selectDrone(d.drone_id)); m.bindPopup(`<b>${d.drone_id}</b>`);
+            m.on('click', () => selectDrone(d.drone_id)); 
+            m.bindPopup(`<b>${d.drone_id}</b>`);
             m.setOpacity(d.is_tracked ? 1.0 : 0.6);
             droneMarkers[d.drone_id] = m;
         }

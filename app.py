@@ -1,4 +1,3 @@
-# --- WAŻNE: To musi być na samym początku, przed innymi importami ---
 import eventlet
 eventlet.monkey_patch()
 
@@ -10,33 +9,22 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
 from flask_socketio import SocketIO, emit
 
-# --- KONFIGURACJA ---
 app = Flask(__name__)
-
-# Konfiguracja zrzucania błędów (pomaga w debugowaniu na Renderze)
 app.config['PROPAGATE_EXCEPTIONS'] = True
-
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'tajny_klucz_lokalny_123')
+
 ADMIN_USER = os.environ.get('ADMIN_USER', 'admin')
 ADMIN_PASS = os.environ.get('ADMIN_PASS', 'admin')
 DRONE_API_KEY = os.environ.get('DRONE_API_KEY', '12345')
 DB_FILE = "drones_state.json"
 
-# Inicjalizacja Socket.IO z obsługą CORS
-# ping_timeout=10 i ping_interval=5 pomagają utrzymać połączenie na Renderze
 socketio = SocketIO(app, 
                     cors_allowed_origins="*", 
                     async_mode='eventlet',
                     ping_timeout=10, 
                     ping_interval=5)
 
-# Baza danych w pamięci RAM
 drones_db = {}
-# W Eventlet nie używamy threading.Lock, tylko eventlet.semaphore (lub po prostu polegamy na jednowątkowości procesu)
-# Ale dla bezpieczeństwa zostawmy prostą strukturę, bo Eventlet w trybie -w 1 jest bezpieczny dla słowników
-# (Lock usunięty celowo, by nie powodować deadlocków w prostym scenariuszu)
-
-# --- ZARZĄDZANIE DANYMI ---
 
 def load_db():
     global drones_db
@@ -50,15 +38,11 @@ def load_db():
             drones_db = {}
 
 def save_db_background():
-    """Zapisuje stan do pliku w tle - wersja bezpieczna dla Eventlet"""
     while True:
-        # WAŻNE: Używamy socketio.sleep zamiast time.sleep!
-        socketio.sleep(10) 
+        socketio.sleep(10)
         try:
-            # Szybki zrzut do pliku
             with open(DB_FILE, 'w') as f:
                 json.dump(drones_db, f, indent=4)
-            # print("[SYSTEM] Auto-zapis bazy wykonany.") # Odkomentuj do debugowania
         except Exception as e:
             print(f"[ERROR] Błąd zapisu tła: {e}")
 
@@ -75,22 +59,36 @@ def get_drone_entry(drone_id):
 
 def push_update_to_clients():
     all_drones_snapshot = []
-    # Kopiujemy klucze, żeby nie iterować po zmieniającym się słowniku
     current_keys = list(drones_db.keys())
     
     for d_id in current_keys:
         d_data = drones_db[d_id]
         if d_data.get("telemetry"):
             telem_copy = d_data["telemetry"].copy()
-            telem_copy["server_assigned_role"] = d_data.get("assigned_role", "None")
-            # Status Online (timeout 15s)
+            
+            # --- FORMATOWANIE DLA FRONTENDU ---
+            
+            # 1. Rola (brak/leader/follower/dron)
+            role = d_data.get("assigned_role", "None")
+            telem_copy["server_assigned_role"] = "brak" if role == "None" else role
+            
+            # 2. Status misji: (brak/id_misji) / id_next_waypointa
+            mission = d_data.get("current_mission")
+            target_wp = telem_copy.get("target_wp", 0)
+            
+            if mission:
+                # Jeśli target_wp > 0 to pokazujemy numer, w przeciwnym razie "-"
+                wp_display = target_wp if target_wp > 0 else "-"
+                telem_copy["mission_display"] = f"{mission['id']} / {wp_display}"
+            else:
+                telem_copy["mission_display"] = "brak"
+            # ----------------------------------
+
             telem_copy["online"] = (time.time() - d_data.get("last_seen", 0)) < 15
             telem_copy["is_tracked"] = d_data.get("is_tracked", False)
             all_drones_snapshot.append(telem_copy)
     
     socketio.emit('telemetry_update', all_drones_snapshot)
-
-# --- DEKORATORY ---
 
 def check_auth(username, password):
     return username == ADMIN_USER and password == ADMIN_PASS
@@ -119,8 +117,6 @@ def requires_drone_token(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- ENDPOINTY ---
-
 @app.route("/")
 @requires_auth
 def index():
@@ -138,6 +134,13 @@ def receive_telemetry():
         
         entry = get_drone_entry(drone_id)
         
+        # Bezpieczne pobranie numeru WP
+        raw_wp = data.get("target_wp", 0)
+        try:
+            safe_wp = int(raw_wp)
+        except:
+            safe_wp = 0
+
         entry["telemetry"] = {
             "drone_id": drone_id,
             "lat": data.get("lat"),
@@ -147,6 +150,7 @@ def receive_telemetry():
             "roll": data.get("roll", 0),
             "pitch": data.get("pitch", 0),
             "yaw": data.get("yaw", 0),
+            "target_wp": safe_wp,  # Zapisujemy, do którego punktu leci
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         entry["last_seen"] = time.time()
@@ -156,7 +160,6 @@ def receive_telemetry():
             "mission": entry["current_mission"]
         }
 
-        # WebSocket push
         push_update_to_clients()
 
         return jsonify(response_payload), 200
@@ -233,10 +236,8 @@ def stop_mission():
 
 if __name__ == "__main__":
     load_db()
-    # Uruchamiamy zadanie w tle przy starcie w trybie SocketIO
     socketio.start_background_task(save_db_background)
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
 else:
-    # Ten blok wykonuje się na Renderze (gunicorn)
     load_db()
     socketio.start_background_task(save_db_background)
