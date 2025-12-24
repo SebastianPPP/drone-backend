@@ -1,5 +1,8 @@
 /* ''' GLOBALNE ZMIENNE ''' */
-const socket = io();
+const socket = io({
+    transports: ['websocket'],
+    upgrade: false
+});
 
 let map;
 let droneMarkers = {};

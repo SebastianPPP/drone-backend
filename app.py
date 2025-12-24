@@ -22,7 +22,6 @@ DRONE_API_KEY = os.environ.get('DRONE_API_KEY', '12345')
 DB_FILE = "drones_state.json"
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-
 drones_db = {}
 db_lock = threading.Lock()
 
