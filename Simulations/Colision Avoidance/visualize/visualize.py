@@ -5,14 +5,14 @@ from matplotlib.patches import Rectangle
 # =====================
 # HARD-CODED OBSTACLE (TEST 2)
 # =====================
-OBSTACLE_TYPE = "Brick block"
+OBSTACLE_TYPE = "Wall"
 OBSTACLE_POS = (0.379553, 0.0437297)   # x, y
-OBSTACLE_SIZE = (12.0, 2.0)             # size in XY [m]
-
+#OBSTACLE_SIZE = (12.0, 2.0)             # size in XY [m]
+OBSTACLE_SIZE = (2.0, 2.0)
 # =====================
 # LOAD TRAJECTORY
 # =====================
-df = pd.read_csv("data/heron_trajectory.csv")
+df = pd.read_csv("data/heron_trajectory1.csv")
 
 # =====================
 # PLOT TRAJECTORY
@@ -54,8 +54,18 @@ obstacle_rect = Rectangle(
     label=f"Obstacle ({OBSTACLE_TYPE})"
 )
 
-plt.gca().add_patch(obstacle_rect)
+obstacle_round = plt.Circle(
+    (ox, oy),
+    sx / 2.0,
+    linewidth=2.5,
+    edgecolor="red",
+    facecolor="none",
+    linestyle="--",
+    label=f"Obstacle ({OBSTACLE_TYPE})"
+)
 
+plt.gca().add_patch(obstacle_round)
+#plt.gca().add_patch(obstacle_rect)
 # =====================
 # PLOT SETTINGS
 # =====================
