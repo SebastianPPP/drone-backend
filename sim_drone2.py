@@ -1,181 +1,134 @@
+"""
+sim_leader.py — Symulator drona-lidera "skimmer1"
+Lata po okręgu i wysyła telemetrię do GCS.
+Follower (follower1) podąża za nim automatycznie.
+
+Uzycie:
+    python3 sim_leader.py
+    python3 sim_leader.py --id skimmer1 --radius 0.0008 --speed 1.5
+"""
+
 import requests
 import time
 import math
-import numpy as np
+import argparse
+import random
+import sys
 
-# --- KONFIGURACJA ---
-BACKEND_URL_DRONES = "https://drone-backend-2-1mwz.onrender.com/api/drones"
-BACKEND_URL_TELEM = "https://drone-backend-2-1mwz.onrender.com/api/telemetry"
+parser = argparse.ArgumentParser(description="Symulator lidera")
+parser.add_argument("--host",   default="drone-backend-2-1mwz.onrender.com", help="Host GCS")
+parser.add_argument("--id",     default="skimmer1",   help="ID lidera")
+parser.add_argument("--token",  default="ZTBdrony",   help="X-Drone-Token")
+parser.add_argument("--lat",    default=52.2297, type=float)
+parser.add_argument("--lon",    default=21.0122, type=float)
+parser.add_argument("--radius", default=0.0006, type=float, help="Promien okrego (stopnie)")
+parser.add_argument("--alt",    default=30.0,   type=float, help="Wysokosc (m)")
+parser.add_argument("--speed",  default=1.0,    type=float, help="Predkosc katowa")
+args = parser.parse_args()
 
-API_KEY = "ZTBdrony"
-DRONE_ID = "follower1"
-LEADER_ID = "skimmer1" 
-START_LAT = 52.2297
-START_LON = 21.0120 
+BASE_URL = "https://{}".format(args.host)
+ENDPOINT = BASE_URL + "/api/telemetry"
+HEADERS  = {"Content-Type": "application/json", "X-Drone-Token": args.token}
 
-TARGET_DISTANCE = 8.0   
-ZONE_RED = 3.0          
+COLORS = {
+    "reset":  "\033[0m",
+    "green":  "\033[92m",
+    "yellow": "\033[93m",
+    "red":    "\033[91m",
+    "cyan":   "\033[96m",
+    "blue":   "\033[94m",
+    "dim":    "\033[2m",
+}
+def c(color, text):
+    return COLORS.get(color, "") + str(text) + COLORS["reset"]
 
-class LocalFrame:
-    def __init__(self, lat0, lon0):
-        self.lat0 = lat0
-        self.lon0 = lon0
-        self.R = 6371000 
-    def gps_to_xy(self, lat, lon):
-        x = (lon - self.lon0) * (np.pi/180) * self.R * np.cos(self.lat0 * np.pi/180)
-        y = (lat - self.lat0) * (np.pi/180) * self.R
-        return x, y
-    def xy_to_gps(self, x, y):
-        lat = self.lat0 + (y / self.R) * (180/np.pi)
-        lon = self.lon0 + (x / (self.R * np.cos(self.lat0 * np.pi/180))) * (180/np.pi)
-        return lat, lon
+print(c("blue", """
++------------------------------------------+
+|     GCS LEADER SIMULATOR // skimmer1     |
++------------------------------------------+"""))
+print(c("blue", "  ID     : " + args.id))
+print(c("blue", "  Server : " + BASE_URL))
+print(c("blue", "  Orbit  : {:.4f}, {:.4f}".format(args.lat, args.lon)))
+print(c("blue", "+------------------------------------------+\n"))
+print(c("dim", "Ctrl+C aby zatrzymac\n"))
 
-class AdaptiveFuzzyController:
-    def __init__(self):
-        self.K_PSI = 2.5   
-        self.K_Z = 20.0    
-        self.ETA = 2.0     
-        self.num_rules = 11
-        self.centers = np.linspace(-2.0, 2.0, self.num_rules)
-        self.width = 2.0
-        self.theta = np.zeros(self.num_rules)
+battery = 100.0
+angle   = 0.0
+tick    = 0
+errors  = 0
 
-    def _fuzzy_basis(self, error_val):
-        basis = np.exp(-(error_val - self.centers) ** 2 / (self.width ** 2))
-        norm = np.sum(basis)
-        return basis / norm if norm > 0.0001 else basis
+while True:
+    tick  += 1
+    angle += 0.025 * args.speed
 
-    def compute(self, current_state, target_wp, actual_leader_pos, dt=0.05):
-        x, y = current_state['x'], current_state['y']
-        psi = current_state['yaw']
-        r = current_state['r']
-        u = current_state['u']
-        tx, ty = target_wp
-        lx, ly = actual_leader_pos
+    lat = args.lat + math.sin(angle) * args.radius
+    lon = args.lon + math.cos(angle) * args.radius
+    yaw = (math.degrees(angle + math.pi / 2)) % 360
+    alt = args.alt + math.sin(angle * 0.7) * 2 + random.uniform(-0.3, 0.3)
 
-        real_dist_to_leader = math.hypot(lx - x, ly - y)
+    roll  = math.sin(angle * 2) * 6 + random.uniform(-1, 1)
+    pitch = math.cos(angle * 3) * 4 + random.uniform(-1, 1)
 
-        if real_dist_to_leader < ZONE_RED:
-            # Hamowanie awaryjne
-            return -200.0, 0.0 
+    battery -= random.uniform(0.005, 0.02)
+    battery  = max(0.0, battery)
 
-        desired_psi = math.atan2(ty - y, tx - x)
-        e_psi = desired_psi - psi
-        e_psi = math.atan2(math.sin(e_psi), math.cos(e_psi)) 
+    if battery > 40:
+        bat_color = "green"
+    elif battery > 20:
+        bat_color = "yellow"
+    else:
+        bat_color = "red"
 
-        alpha_r = self.K_PSI * e_psi
-        z_r = r - alpha_r
-        xi = self._fuzzy_basis(z_r)
-        d_theta = self.ETA * z_r * xi * dt
-        self.theta += d_theta
-        if np.linalg.norm(self.theta) > 30.0:
-            self.theta *= 30.0 / np.linalg.norm(self.theta)
-        fuzzy_comp = np.dot(self.theta, xi)
-        torque_z = -self.K_Z * z_r - fuzzy_comp
-        
-        dist_to_virtual = math.hypot(tx - x, ty - y)
-        force_x = 0.0
-        MAX_TORQUE = 80.0
-        
-        if abs(e_psi) > 0.8:
-            force_x = 0.0
-            MAX_TORQUE = 100.0
-        elif abs_angle_err := abs(e_psi) > 0.35:
-            force_x = 40.0
-            MAX_TORQUE = 60.0
+    payload = {
+        "drone_id":  args.id,
+        "lat":       round(lat, 7),
+        "lon":       round(lon, 7),
+        "alt":       round(alt, 1),
+        "battery":   round(battery, 1),
+        "roll":      round(roll, 2),
+        "pitch":     round(pitch, 2),
+        "yaw":       round(yaw, 1),
+        "target_wp": 0,
+    }
+
+    try:
+        resp = requests.post(ENDPOINT, json=payload, headers=HEADERS, timeout=3)
+
+        if resp.status_code == 200:
+            errors = 0
+            lat_s = "{:.5f}".format(payload["lat"])
+            lon_s = "{:.5f}".format(payload["lon"])
+            yaw_s = "{:>5.1f}deg".format(payload["yaw"])
+            bat_s = "{:>5.1f}%".format(payload["battery"])
+
+            print(
+                c("dim",  "[{:>4}]".format(tick)) + " " +
+                c("blue", "LEADER " + args.id) +
+                c("dim",  "  |  ") +
+                "LAT " + c("cyan", lat_s) + "  " +
+                "LON " + c("cyan", lon_s) + "  " +
+                "YAW " + c("dim",  yaw_s) + "  " +
+                "BAT " + c(bat_color, bat_s)
+            )
+        elif resp.status_code == 401:
+            print(c("red", "[BLAD 401] Zly token!"))
+            sys.exit(1)
         else:
-            desired_speed = 3.5 * dist_to_virtual 
-            desired_speed = min(desired_speed, 12.0)
-            
-            force_error = desired_speed - u
-            force_x = 200.0 * force_error
-            MAX_TORQUE = 40.0 
+            print(c("red", "[BLAD {}] {}".format(resp.status_code, resp.text[:60])))
+            errors += 1
 
-        torque_z = max(min(torque_z, MAX_TORQUE), -MAX_TORQUE)
-        return force_x, torque_z
+    except requests.exceptions.ConnectionError:
+        errors += 1
+        print(c("red", "[BRAK POLACZENIA] proba {}...".format(errors)))
+        if errors >= 10:
+            sys.exit(1)
 
-class PhysicsModel:
-    def __init__(self):
-        self.u, self.r = 0.0, 0.0
-        self.m, self.I = 20.0, 5.0
-        self.drag_u = 0.5 
-        self.drag_r = 2.0
-    def step(self, fx, tz, dt):
-        acc_u = (fx - self.drag_u * self.u) / self.m
-        acc_r = (tz - self.drag_r * self.r) / self.I
-        self.u += acc_u * dt
-        self.r += acc_r * dt
-        return self.u, self.r
+    except requests.exceptions.Timeout:
+        print(c("yellow", "[TIMEOUT]"))
+        errors += 1
 
-def main():
-    geo = LocalFrame(START_LAT, START_LON)
-    logic = AdaptiveFuzzyController()
-    physics = PhysicsModel()
+    except KeyboardInterrupt:
+        print(c("blue", "\nLEADER ZATRZYMANY po {} tickach.".format(tick)))
+        sys.exit(0)
 
-    local_x, local_y = -10.0, -10.0 
-    yaw = 0.0
-    
-    current_data = {"role": "follower", "battery": 95.0}
-    dt = 0.1
-    headers = {"X-Drone-Token": API_KEY, "Content-Type": "application/json"}
-    
-    print(f"--- Start FOLLOWER: {DRONE_ID} ---", flush=True)
-
-    while True:
-        leader_state = None
-        
-        try:
-            resp = requests.get(BACKEND_URL_DRONES, timeout=2)
-            if resp.status_code == 200:
-                drones = resp.json()
-                for d in drones:
-                    if d.get('drone_id') == LEADER_ID:
-                        leader_state = d
-                        break
-        except Exception: 
-            pass
-
-        fx, tz = 0.0, 0.0
-
-        if leader_state:
-            l_lat, l_lon = leader_state['lat'], leader_state['lon']
-            l_yaw_rad = math.radians(leader_state.get('yaw', 0))
-            
-            lx, ly = geo.gps_to_xy(l_lat, l_lon)
-            
-            target_x = lx - TARGET_DISTANCE * math.cos(l_yaw_rad)
-            target_y = ly - TARGET_DISTANCE * math.sin(l_yaw_rad)
-            
-            state = {'x': local_x, 'y': local_y, 'yaw': yaw, 'r': physics.r, 'u': physics.u}
-            fx, tz = logic.compute(state, (target_x, target_y), (lx, ly), dt)
-        else:
-            # Brak lidera - HOVER
-            fx = -20.0 * physics.u
-            tz = -10.0 * physics.r
-
-        physics.step(fx, tz, dt)
-        local_x += physics.u * math.cos(yaw) * dt
-        local_y += physics.u * math.sin(yaw) * dt
-        yaw += physics.r * dt
-        yaw = math.atan2(math.sin(yaw), math.cos(yaw))
-
-        new_lat, new_lon = geo.xy_to_gps(local_x, local_y)
-        current_data["battery"] = max(0, current_data["battery"] - 0.01)
-        
-        payload = {
-            "drone_id": DRONE_ID,
-            "lat": new_lat, "lon": new_lon, "alt": 10,
-            "battery": round(current_data["battery"], 1),
-            "yaw": round(math.degrees(yaw), 2),
-            "roll": 0, "pitch": 0,
-            "target_wp": 0 
-        }
-        
-        try:
-            requests.post(BACKEND_URL_TELEM, json=payload, headers=headers, timeout=1)
-        except Exception: pass
-        
-        time.sleep(dt)
-
-if __name__ == "__main__":
-    main()
+    time.sleep(0.1)
