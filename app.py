@@ -1,5 +1,5 @@
-import eventlet
-eventlet.monkey_patch()
+from gevent import monkey
+monkey.patch_all()
 
 import os
 import json
@@ -20,7 +20,7 @@ DB_FILE = "drones_state.json"
 
 socketio = SocketIO(app, 
                     cors_allowed_origins="*", 
-                    async_mode='eventlet',
+                    async_mode='gevent',
                     ping_timeout=10, 
                     ping_interval=5)
 
@@ -242,7 +242,7 @@ def stop_mission():
     
     if not target_drones: 
         target_drones = list(drones_db.keys())
-        
+            
     for drone_id in target_drones:
         if drone_id in drones_db:
             entry = drones_db[drone_id]
