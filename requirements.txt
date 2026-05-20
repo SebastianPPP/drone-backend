@@ -2,7 +2,10 @@ Flask
 Flask-SocketIO
 python-socketio
 python-engineio
-gunicorn
+gunicorn==21.2.0
 eventlet==0.33.3
 python-dotenv
 requests
+gunicorn
+gevent
+gevent-websocket
