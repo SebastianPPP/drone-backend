@@ -421,11 +421,49 @@ function updateDronePanel(d) {
         missionBadge.innerText = '—';
     }
 
-    // Camera — placeholder logic: check if drone has 'camera' flag (future feature)
+    // Camera -- MJPEG stream z cam_url
     const hasCamera = d.has_camera || false;
-    document.getElementById('cam-status-label').innerText = hasCamera ? 'LIVE' : 'NO SIGNAL';
-    const dot = document.querySelector('.cam-status-dot');
-    dot.style.background = hasCamera ? '#00ff6a' : '#ff3c3c';
+    const camUrl    = d.cam_url || null;
+    const statusLabel = document.getElementById('cam-status-label');
+    const dot         = document.querySelector('.cam-status-dot');
+    const placeholder = document.getElementById('cam-placeholder');
+    const video       = document.getElementById('cam-video');
+
+    let camImg = document.getElementById('cam-img');
+
+    if (hasCamera && camUrl) {
+        statusLabel.innerText = 'LIVE';
+        dot.style.background  = '#00ff6a';
+        dot.style.boxShadow   = '0 0 6px #00ff6a';
+        placeholder.style.display = 'none';
+        video.style.display       = 'none';
+
+        if (!camImg) {
+            camImg = document.createElement('img');
+            camImg.id    = 'cam-img';
+            camImg.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;position:absolute;top:0;left:0;';
+            const overlay = document.querySelector('.camera-overlay');
+            document.getElementById('camera-feed').insertBefore(camImg, overlay);
+        }
+        if (camImg.dataset.droneId !== d.drone_id) {
+            camImg.src             = camUrl;
+            camImg.dataset.droneId = d.drone_id;
+            camImg.style.display   = 'block';
+            camImg.onerror = () => {
+                statusLabel.innerText     = 'NO SIGNAL';
+                dot.style.background      = '#ff3c3c';
+                dot.style.boxShadow       = '';
+                placeholder.style.display = '';
+                camImg.style.display      = 'none';
+            };
+        }
+    } else {
+        statusLabel.innerText     = 'NO SIGNAL';
+        dot.style.background      = '#ff3c3c';
+        dot.style.boxShadow       = '';
+        placeholder.style.display = '';
+        if (camImg) camImg.style.display = 'none';
+    }
 }
 
 function updateHUD(roll, pitch, yaw) {
