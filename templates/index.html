@@ -2,7 +2,7 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
-  <title>Drony – Panel GCS</title>
+  <title>GCS // DRONE OPS</title>
   
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -10,117 +10,180 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; background: #2a2a2a; overflow: hidden; }
-    
-    #sidebar { width: 280px; background: #fff; border-right: 1px solid #ccc; padding: 15px; overflow-y: auto; z-index: 2000; display: flex; flex-direction: column; }
-    #sidebar h3 { margin: 15px 0 8px; font-size: 0.85rem; color: #1322E6; border-bottom: 2px solid #1322E6; text-transform: uppercase; }
-    
-    .item { 
-        padding: 10px; 
-        border-radius: 4px; 
-        cursor: pointer; 
-        margin-bottom: 5px; 
-        background: #f8f9fa; 
-        font-size: 0.9rem; 
-        border-left: 4px solid transparent; 
-        transition: all 0.15s ease-out;
-    }
-    .item-content { display: flex; justify-content: space-between; align-items: center; width: 100%; }
-
-    .item:hover { 
-        background: #eef0ff; 
-        border-left-width: 12px; 
-    }
-
-    .item.active { border-left-color: #28a745; font-weight: 600; } 
-    .item.inactive { border-left-color: #c62828; color: #666; } 
-    .item.detected { border-left-color: #ff9800; color: #555; background: #fff8e1; } 
-    
-    .item.selected { 
-        background: #e6e8ff; 
-        border-left-width: 12px; 
-        border-left-color: #1322E6;
-    }
-
-    .list-btn { background: none; border: none; font-size: 1.1rem; cursor: pointer; padding: 0 5px; margin-left: 5px; transition: transform 0.2s; }
-    .list-btn:hover { transform: scale(1.2); }
-    .btn-delete { color: #aaa; }
-    .btn-delete:hover { color: #dc3545; }
-    .btn-add { color: #28a745; font-weight: bold; }
-    .btn-add:hover { color: #1e7e34; }
-
-    .sidebar-control { margin-top: auto; border-top: 1px solid #eee; padding-top: 15px; }
-    button { width: 100%; padding: 10px; margin-bottom: 8px; cursor: pointer; border: none; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
-    #mission-btn { background: #28a745; color: white; }
-    #generate-path-btn { background: #1322E6; color: white; }
-    #clear-mission-btn { background: #dc3545; color: white; opacity: 0.5; }
-    #clear-mission-btn:enabled { opacity: 1; }
-    
-    #map { flex: 1; z-index: 1; background: #222; }
-     
-    #gauges-container { position: absolute; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 15px; z-index: 1000; pointer-events: none; transition: opacity 0.3s; }
-    .hidden { opacity: 0; }
-    .gauge { width: 140px; height: 140px; background-color: rgba(15, 15, 15, 0.85); border-radius: 50%; border: 3px solid #555; position: relative; overflow: hidden; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
-    #attitude-indicator { background: #333; }
-    #horizon-gradient { position: absolute; top: -100%; left: -100%; width: 300%; height: 300%; background: linear-gradient(to bottom, #00bfff 50%, #8b4513 50%); transition: transform 0.05s linear; z-index: 1; }
-    .horizon-line { position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.8); }
-    #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 40px; height: 2px; background: #ffff00; z-index: 10; }
-    #crosshair::after { content: ''; position: absolute; top: -6px; left: 50%; width: 2px; height: 12px; background: #ffff00; transform: translateX(-50%); }
-    #compass { background: rgba(20, 20, 20, 0.9); color: white; }
-    .compass-rose { width: 100%; height: 100%; position: relative; }
-    .compass-label { position: absolute; font-size: 12px; color: #aaa; font-family: monospace; }
-    .label-n { top: 8px; left: 50%; transform: translateX(-50%); color: #ff4444; }
-    .label-e { right: 10px; top: 50%; transform: translateY(-50%); }
-    .label-s { bottom: 8px; left: 50%; transform: translateX(-50%); }
-    .label-w { left: 10px; top: 50%; transform: translateY(-50%); }
-    .compass-needle { position: absolute; bottom: 50%; left: 50%; width: 4px; height: 35%; background: #ff4444; transform-origin: bottom center; transition: transform 0.1s cubic-bezier(0.25, 1, 0.5, 1); z-index: 5; }
-    .hud-text { position: absolute; bottom: 15%; width: 100%; text-align: center; font-family: monospace; font-size: 11px; color: #0f0; text-shadow: 1px 1px 0 #000; z-index: 20; }
-  </style>
 </head>
 <body>
+
+  <!-- ─── SIDEBAR ───────────────────────────────────── -->
   <div id="sidebar">
-    <h3>Aktywne</h3>
-    <div id="active-list"></div> <h3>Nieaktywne</h3>
-    <div id="inactive-list"></div> <h3>Wykryte</h3>
-    <div id="detected-list"></div> <div class="sidebar-control">
-      <div id="mission-info" style="font-size:0.8rem; color:#666; margin-bottom:5px;"></div>
-      
+    <div class="sidebar-lists">
+      <h3>Aktywne</h3>
+      <div id="active-list"></div>
+
+      <h3>Nieaktywne</h3>
+      <div id="inactive-list"></div>
+
+      <h3>Wykryte</h3>
+      <div id="detected-list"></div>
+    </div>
+
+    <div class="sidebar-control">
+      <div id="mission-info"></div>
+
       <div class="control-group">
-        <label style="font-size:0.75rem; font-weight:bold; color:#555;">Typ misji:</label>
-        <select id="mission-type-select" style="width:100%; padding:5px; margin-top:5px;">
-          <option value="lawnmower">Lawnmower (Obszar)</option>
-          <option value="waypoints">Waypoints (Trasa)</option>
+        <label>TYP MISJI</label>
+        <select id="mission-type-select">
+          <option value="lawnmower">LAWNMOWER // OBSZAR</option>
+          <option value="waypoints">WAYPOINTS // TRASA</option>
         </select>
       </div>
 
-      <div id="density-control" style="margin: 10px 0; padding: 10px; background: #f0f0f0; display:none;">
-        <label style="font-size:0.75rem; font-weight:bold;">Odstęp (m):</label>
-        <input type="number" id="scan-distance" min="5" value="20" style="width:100%;">
+      <div id="density-control" style="display:none; margin-top:8px;">
+        <label class="control-group" style="font-family:'Share Tech Mono',monospace; font-size:9px; letter-spacing:2px; color:#4a6655;">ODSTĘP (M)</label>
+        <input type="number" id="scan-distance" min="5" value="20">
       </div>
 
-      <button id="mission-btn">Nowa misja</button>
-      <button id="generate-path-btn">Generuj trasę</button>
-      <button id="clear-mission-btn" disabled>Usuń misję</button>
+      <div style="margin-top: 10px;">
+        <button id="mission-btn">NOWA MISJA</button>
+        <button id="generate-path-btn">GENERUJ TRASĘ</button>
+        <button id="clear-mission-btn" disabled>USUŃ MISJĘ</button>
+      </div>
     </div>
   </div>
 
+  <!-- ─── MAP ───────────────────────────────────────── -->
   <div id="map"></div>
 
+  <!-- ─── HUD GAUGES ────────────────────────────────── -->
   <div id="gauges-container" class="hidden">
     <div id="attitude-indicator" class="gauge">
       <div id="horizon-gradient"><div class="horizon-line"></div></div>
       <div id="crosshair"></div>
-      <div class="hud-text" id="hud-roll-pitch">R: 0° P: 0°</div>
+      <div class="hud-text" id="hud-roll-pitch">R:0 P:0</div>
     </div>
     <div id="compass" class="gauge">
       <div class="compass-rose">
-        <span class="compass-label label-n">N</span><span class="compass-label label-e">E</span><span class="compass-label label-s">S</span><span class="compass-label label-w">W</span>
+        <span class="compass-label label-n">N</span>
+        <span class="compass-label label-e">E</span>
+        <span class="compass-label label-s">S</span>
+        <span class="compass-label label-w">W</span>
         <div class="compass-needle" id="compass-needle-el"></div>
       </div>
-      <div class="hud-text" id="hud-yaw" style="bottom: 10px;">HDG: 0°</div>
+      <div class="hud-text" id="hud-yaw" style="bottom: 10px;">HDG:0°</div>
+    </div>
+  </div>
+
+  <!-- ─── DRONE DETAIL PANEL ────────────────────────── -->
+  <div id="drone-panel" class="hidden">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">// WYBRANO DRONA</div>
+        <div class="panel-drone-id" id="panel-drone-id">—</div>
+      </div>
+      <button class="panel-close" id="panel-close-btn" title="Zamknij">✕</button>
+    </div>
+
+    <!-- Camera -->
+    <div class="camera-section">
+      <div class="section-label">KAMERA POKŁADOWA</div>
+      <div class="camera-feed" id="camera-feed">
+        <div class="camera-placeholder" id="cam-placeholder">
+          <div class="camera-icon">⬡</div>
+          <p>BRAK SYGNAŁU / NO FEED</p>
+        </div>
+        <!-- Live video element - hidden until stream available -->
+        <video id="cam-video" style="width:100%;height:100%;object-fit:cover;display:none;" autoplay muted playsinline></video>
+        <!-- CRT overlay -->
+        <div class="camera-overlay">
+          <div class="cam-corner tl"></div>
+          <div class="cam-corner tr"></div>
+          <div class="cam-corner bl"></div>
+          <div class="cam-corner br"></div>
+          <div class="cam-status">
+            <div class="cam-status-dot"></div>
+            <span id="cam-status-label">NO SIGNAL</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sensors -->
+    <div class="sensors-section">
+      <div class="section-label">CZUJNIKI</div>
+      <div class="sensors-grid">
+
+        <!-- Battery — real data -->
+        <div class="sensor-card available" id="sensor-battery">
+          <div class="sensor-badge badge-ok">OK</div>
+          <div class="sensor-name">BATERIA</div>
+          <div class="sensor-value" id="sv-battery">—</div>
+          <div class="sensor-unit">%</div>
+        </div>
+
+        <!-- Altitude — real data -->
+        <div class="sensor-card available" id="sensor-alt">
+          <div class="sensor-badge badge-ok">OK</div>
+          <div class="sensor-name">WYSOKOŚĆ</div>
+          <div class="sensor-value" id="sv-alt">—</div>
+          <div class="sensor-unit">m AGL</div>
+        </div>
+
+        <!-- Heading — real data -->
+        <div class="sensor-card available" id="sensor-hdg">
+          <div class="sensor-badge badge-ok">OK</div>
+          <div class="sensor-name">KURS</div>
+          <div class="sensor-value" id="sv-hdg">—</div>
+          <div class="sensor-unit">°</div>
+        </div>
+
+        <!-- GPS — placeholder -->
+        <div class="sensor-card unavailable" id="sensor-gps">
+          <div class="sensor-badge badge-na">N/A</div>
+          <div class="sensor-name">GPS HDOP</div>
+          <div class="sensor-value">—</div>
+          <div class="sensor-unit">HDOP</div>
+        </div>
+
+        <!-- Speed — placeholder -->
+        <div class="sensor-card unavailable" id="sensor-spd">
+          <div class="sensor-badge badge-na">N/A</div>
+          <div class="sensor-name">PRĘDKOŚĆ</div>
+          <div class="sensor-value">—</div>
+          <div class="sensor-unit">m/s</div>
+        </div>
+
+        <!-- Temperature — placeholder -->
+        <div class="sensor-card unavailable" id="sensor-temp">
+          <div class="sensor-badge badge-na">N/A</div>
+          <div class="sensor-name">TEMP ESC</div>
+          <div class="sensor-value">—</div>
+          <div class="sensor-unit">°C</div>
+        </div>
+
+        <!-- RSSI — placeholder -->
+        <div class="sensor-card unavailable" id="sensor-rssi">
+          <div class="sensor-badge badge-na">N/A</div>
+          <div class="sensor-name">RSSI</div>
+          <div class="sensor-value">—</div>
+          <div class="sensor-unit">dBm</div>
+        </div>
+
+        <!-- Lidar — placeholder -->
+        <div class="sensor-card unavailable" id="sensor-lidar">
+          <div class="sensor-badge badge-na">N/A</div>
+          <div class="sensor-name">LIDAR</div>
+          <div class="sensor-value">—</div>
+          <div class="sensor-unit">m</div>
+        </div>
+
+        <!-- Current mission -->
+        <div class="sensor-card" id="sensor-mission">
+          <div class="sensor-badge badge-na" id="sb-mission">—</div>
+          <div class="sensor-name">MISJA/WP</div>
+          <div class="sensor-value" style="font-size:11px; line-height:1.3;" id="sv-mission">—</div>
+          <div class="sensor-unit" id="sv-role">—</div>
+        </div>
+
+      </div>
     </div>
   </div>
 
