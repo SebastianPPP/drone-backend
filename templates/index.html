@@ -83,27 +83,20 @@
     </div>
 
     <!-- Camera -->
-    <div class="camera-section">
-      <div class="section-label">KAMERA POKŁADOWA</div>
-      <div class="camera-feed" id="camera-feed">
-        <div class="camera-placeholder" id="cam-placeholder">
-          <div class="camera-icon">⬡</div>
-          <p>BRAK SYGNAŁU / NO FEED</p>
-        </div>
-        <!-- Live video element - hidden until stream available -->
-        <video id="cam-video" style="width:100%;height:100%;object-fit:cover;display:none;" autoplay muted playsinline></video>
-        <!-- CRT overlay -->
-        <div class="camera-overlay">
-          <div class="cam-corner tl"></div>
-          <div class="cam-corner tr"></div>
-          <div class="cam-corner bl"></div>
-          <div class="cam-corner br"></div>
-          <div class="cam-status">
-            <div class="cam-status-dot"></div>
-            <span id="cam-status-label">NO SIGNAL</span>
-          </div>
-        </div>
+    <div class="camera-container" style="position: relative; width: 100%; height: 240px; background: #000;">
+    
+      <!-- Ekran braku sygnału -->
+      <div id="no-signal-screen" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
+          <div class="hexagon-icon"></div>
+          <p style="color: #444; font-family: monospace;">BRAK SYGNAŁU / NO FEED</p>
       </div>
+
+      <!-- Prawdziwy obraz z kamery (domyślnie ukryty) -->
+      <img id="drone-camera" 
+          style="display: none; width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0;" 
+          src="" 
+          alt="Kamera drona"
+          onerror="this.style.display='none'; document.getElementById('no-signal-screen').style.display='flex';" />
     </div>
 
     <!-- Sensors -->
