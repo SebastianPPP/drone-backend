@@ -1,635 +1,478 @@
-/* ---------- ikony ---------- */
-function makeIcon(url) {
-  return new L.Icon({
-    iconUrl: url,
-    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
-  });
-}
-const ICON = {
-  active:   makeIcon("/static/images/active.png"),     // zielony
-  inactive: makeIcon("/static/images/non_active.png"), // czerwony
-  detected: makeIcon("/static/images/drone.png"),      // szary
-  selected: makeIcon("/static/images/marked.png"),     // niebieski
-};
-
-/* ---------- konfiguracja ---------- */
-const API = "/api/telemetry";
-const ACTIVE_MS = 5000;   // <5 s → aktywny
-const DETECT_MS = 10000;  // >10 s → usuwamy z wykrytych
-const ACCEPTED_KEY = "acceptedDrones"; // klucz w localStorage
-const MISSION_KEY = "savedMission"; // klucz dla misji w localStorage
-
-/* ---------- stan ---------- */
-let accepted = new Set();   // drony zaakceptowane – trwałe
-let selected = null;
-let lastSeen = {};          // id → epoch ms
-let markers  = {};          // id → L.marker
-let map;
-let followSelected = false; // czy kamera ma podążać za wybranym dronem
-let missionMode = false; // tryb misji 
-let missionPoints = [];
-let missionLine = null;
-let missionPolygon = null;
-let missionMarkers = []; // do przechowywania markerów misji
-let missionStatuses = {}; // droneId => "W trakcie", "Zakończona", itp.
-
-/* ---------- persistence ---------- */
-function loadAccepted() {
-  try {
-    const arr = JSON.parse(localStorage.getItem(ACCEPTED_KEY) || "[]");
-    arr.forEach(id => accepted.add(id));
-  } catch (e) { console.warn("Nie udało się odczytać localStorage", e); }
-}
-function saveAccepted() {
-  try {
-    localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...accepted]));
-  } catch (e) { console.warn("Nie udało się zapisać localStorage", e); }
-}
-
-/* ---------- helpers ---------- */
-const norm = id => (id || "").trim();
-function statusOf(id) {
-  id = norm(id);
-  const t = lastSeen[id];
-  if (!t) return accepted.has(id) ? "inactive" : "gone";
-  const age = Date.now() - t;
-  if (!accepted.has(id)) return age > DETECT_MS ? "gone" : "detected";
-  return age <= ACTIVE_MS ? "active" : "inactive";
-}
-
-/* ---------- mapa ---------- */
-function initMap() {
-  map = L.map("map").setView([52.1, 19.3], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OSM" }).addTo(map);
-  // Jeśli użytkownik zacznie ręcznie przesuwać mapę, wyłącz automatyczne śledzenie
-  map.on('dragstart zoomstart movestart', () => {
-    followSelected = false;
-  });
-}
-
-document.getElementById("mission-btn").onclick = () => {
-  if (missionMode) {
-    finishMission();
-  } else {
-    startMission();
-  }
-};
-
-
-let expandedMissions = new Set();
-
-function loadExpandedMissions() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("expandedMissions") || "[]");
-    expandedMissions = new Set(saved);
-  } catch (e) { expandedMissions = new Set(); }
-}
-
-function saveExpandedMissions() {
-  localStorage.setItem("expandedMissions", JSON.stringify([...expandedMissions]));
-}
-
-
-/* ---------- render list ---------- */
-function render(ids) {
-  const a = document.getElementById("active-list");
-  const i = document.getElementById("inactive-list");
-  const d = document.getElementById("detected-list");
-  a.innerHTML = i.innerHTML = d.innerHTML = "";
-
-  const addRow = (parent, id, cls, btnTxt, btnAct) => {
-    const row = document.createElement("div");
-    row.className = `item ${cls}${id === selected ? " selected" : ""}`;
-
-    // Tworzymy klikany label (który będzie otwierać drona na mapie)
-    const label = document.createElement("div");
-    label.textContent = id;
-    label.style.cursor = "pointer";
-    label.style.fontWeight = "bold";
-    label.style.flex = "1";
-
-    // Kliknięcie w label otwiera drona, włącza śledzenie i pokazuje popup
-    label.onclick = e => {
-      e.stopPropagation();
-      selected = id;
-      followSelected = true; // przy zaznaczeniu uruchom śledzenie
-      if (markers[id]) {
-        map.setView(markers[id].getLatLng(), map.getZoom());
-        markers[id].openPopup();
-      }
-      refresh(); // Odśwież UI - podświetli drona
-    };
-
-    row.appendChild(label);
-
-    const b = document.createElement("button");
-    b.className = "btn-action";
-    b.textContent = btnTxt;
-    b.onclick = e => { 
-      e.stopPropagation(); 
-      btnAct(id); 
-    };
-    row.appendChild(b);
-
-    parent.appendChild(row);
-  };
-
-  const shown = { a: 0, i: 0, d: 0 };
-  ids.forEach(raw => {
-    const id = norm(raw);
-    const st = statusOf(id);
-    if (st === "gone") return;
-    if (accepted.has(id)) {
-      if (st === "active")  { addRow(a, id, "active",   "Usuń", delAccepted); shown.a++; }
-      else                   { addRow(i, id, "inactive", "Usuń", delAccepted); shown.i++; }
-    } else if (st === "detected") {
-      addRow(d, id, "detected", "Akceptuj", addAccepted); shown.d++;
-    }
-  });
-  if (!shown.a) a.innerHTML = "<em>Brak</em>";
-  if (!shown.i) i.innerHTML = "<em>Brak</em>";
-  if (!shown.d) d.innerHTML = "<em>Brak</em>";
-}
-function addAccepted(id) {
-  accepted.add(norm(id));
-  saveAccepted();
-  if (!selected) selected = norm(id);
-  refresh();
-}
-function delAccepted(id) {
-  accepted.delete(norm(id));
-  saveAccepted();
-  if (selected === norm(id)) selected = null;
-  refresh();
-}
-
-/* ---------- markery ---------- */
-function updateMarkers(data) {
-  data.forEach(rec => {
-    const id = norm(rec.drone_id);
-    const pos = [rec.lat, rec.lon];
-
-    // Zapamiętujemy czas ostatniego sygnału
-    lastSeen[id] = Date.parse(rec.timestamp.split(".")[0] + "Z");
-
-    const st = statusOf(id);
-    let icon = id === selected ? ICON.selected :
-               st === "active"   ? ICON.active :
-               st === "inactive" ? ICON.inactive :
-                                   ICON.detected;
-
-    // Zawartość popupu z parametrami drona
-    const popupHtml = `
-      <div style="width:100%; box-sizing:border-box;">
-        <b style="color:#ffffff; font-size:14px; display:block; margin-bottom:8px; text-align:center;">🛸 Dron: ${id}</b>
-        <div style="border-top:1px solid rgba(19,34,230,0.4); margin:8px 0; padding-top:8px; font-size:13px;">
-          <div style="color:#e0e0e0; margin:5px 0;">🛰 <strong>Lat:</strong> ${rec.lat.toFixed(6)}</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📍 <strong>Lon:</strong> ${rec.lon.toFixed(6)}</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📡 <strong>Wysokość:</strong> ${rec.alt ?? "-"} m</div>
-          <div style="color:#4caf50; margin:5px 0; font-weight:bold;">🔋 <strong>Bateria:</strong> ${rec.battery ?? "-"}%</div>
-          <div style="color:#e0e0e0; margin:5px 0;">↪️ <strong>Kurs:</strong> ${rec.yaw ?? "-"}°</div>
-          <div style="color:#e0e0e0; margin:5px 0;">📅 <strong>Czas:</strong> ${new Date(rec.timestamp).toLocaleTimeString()}</div>
-        </div>
-      </div>
-    `;
-
-    if (!markers[id]) {
-      markers[id] = L.marker(pos, { icon })
-        .addTo(map)
-        .bindPopup(popupHtml, { maxWidth: 250 })
-        .on("click", () => {
-          selected = id;
-          followSelected = true; // przy kliknięciu markera też śledzimy
-          markers[id].openPopup();
-          refresh(); // odśwież ikonę aktywnego
-        });
-    } else {
-      markers[id]
-        .setLatLng(pos)
-        .setIcon(icon)
-        .bindPopup(popupHtml, { maxWidth: 250 });
-      
-      // Jeśli dron jest wybrany i włączone śledzenie, przesuwaj mapę za nim
-      if (id === selected) {
-        markers[id].openPopup();
-        if (followSelected && map) {
-          try {
-            map.panTo(markers[id].getLatLng(), { animate: true, duration: 0.5 });
-          } catch (e) {
-            // fallback
-            map.setView(markers[id].getLatLng(), map.getZoom());
-          }
-        }
-      }
-    }
-  });
-}
-
-/* ---------- fetch ---------- */
-async function refresh() {
-  try {
-    const res = await fetch(API);
-    const data = await res.json();
-    const ids = [...new Set([...data.map(d => norm(d.drone_id)), ...accepted])];
-    updateMarkers(data);
-    render(ids);
-    console.log("telemetry data:", data);
-
-    missionStatuses = {}; // reset statusów misji
-    data.forEach(d => {
-      missionStatuses[d.drone_id] = d.mission_status || "Brak misji";
-    });
-
-    // ─── OBSŁUGA KAMERY ────────────────────────────────────────────────────────
-    if (selected) {
-      // Znajdź dane obecnie zaznaczonego drona
-      const selectedDroneData = data.find(d => norm(d.drone_id) === selected);
-      
-      const camImg = document.getElementById("drone-camera");
-      const noSignal = document.getElementById("no-signal-screen");
-
-      if (camImg && noSignal) {
-        // Jeśli dron istnieje, ma włączoną kamerę i serwer podał adres URL
-        if (selectedDroneData && selectedDroneData.has_camera && selectedDroneData.cam_url) {
-          
-          // Zmień src tylko jeśli adres jest inny (aby uniknąć migotania obrazu)
-          if (camImg.src !== selectedDroneData.cam_url) {
-            camImg.src = selectedDroneData.cam_url;
-          }
-          camImg.style.display = "block";
-          noSignal.style.display = "none";
-
-        } else {
-          // Dron nie ma kamery
-          camImg.style.display = "none";
-          noSignal.style.display = "flex";
-        }
-      }
-    } else {
-      // Żaden dron nie jest wybrany
-      const camImg = document.getElementById("drone-camera");
-      const noSignal = document.getElementById("no-signal-screen");
-      if(camImg) camImg.style.display = "none";
-      if(noSignal) noSignal.style.display = "flex";
-    }
-    // ───────────────────────────────────────────────────────────────────────────
-
-  } catch (e) { console.error(e); }
-}
-
-/* ---------- init ---------- */
-document.addEventListener("DOMContentLoaded", () => {
-  loadAccepted();
-  loadExpandedMissions();
-  initMap();
-  refresh();
-  setInterval(refresh, 3000);
-  loadMission();
-  document.getElementById("generate-path-btn").onclick = () => {
-    // Używamy wszystkich zaakceptowanych dronów (nawet jeśli chwilowo nie wysyłają telemetrii)
-    const acceptedDronesList = [...accepted].sort();
-
-    if (acceptedDronesList.length === 0) {
-      alert("❌ Brak zaakceptowanych dronów! Najpierw zaakceptuj co najmniej jeden dron.");
-      return;
-    }
-
-    // Pokaż status (ostatnie widziane) dla zaakceptowanych dronów
-    const droneStatuses = acceptedDronesList.map(id => {
-      const age = Date.now() - (lastSeen[id] || 0);
-      const status = age <= 10000 ? "✅ AKTYWNY" : "⏱️ NIEAKTYWNY";
-      return `${id} ${status}`;
-    }).join("\n");
-
-    alert(`✅ Znaleziono ${acceptedDronesList.length} zaakceptowanych dronów:\n\n${droneStatuses}`);
-
-    // Zapytaj o typ algorytmu
-    const algorithmChoice = prompt(
-      "Wybierz typ tworzenia trasy:\n\n1 - Lawnmower (równoległy scan)\n2 - D-Star Lite (dynamiczne planowanie)\n3 - VFH (Vector Field Histogram)\n\nWpisz 1, 2 lub 3:",
-      "1"
-    );
-
-    if (!algorithmChoice || !["1", "2", "3"].includes(algorithmChoice)) {
-      alert("❌ Nieprawidłowy wybór algorytmu!");
-      return;
-    }
-
-    const n = parseInt(prompt("Ile dronów użyć?", Math.min(3, acceptedDronesList.length)), 10);
-    if (isNaN(n) || n < 1 || n > acceptedDronesList.length) {
-      alert("❌ Nieprawidłowa liczba dronów!");
-      return;
-    }
-
-    const s = parseFloat(prompt("Podaj krok (w metrach) — np. 50", "50"));
-    if (isNaN(s) || s <= 0) {
-      alert("❌ Nieprawidłowy krok!");
-      return;
-    }
-
-    const algorithmNames = { "1": "Lawnmower", "2": "D-Star Lite", "3": "VFH" };
-    generateFlightPathsForDrones(n, s, algorithmChoice, algorithmNames[algorithmChoice]);
-  };
-
+const socket = io({
+    transports: ['polling'],
+    upgrade: false
 });
 
+let map;
+let droneMarkers = {};
+let missionLayer = new L.LayerGroup(); 
+let drawingLayer = new L.LayerGroup(); 
+let isDrawingMode = false;
+let drawingMarkers = []; 
+let drawingPolyline = null; 
+let finalWaypoints = []; 
+let missionPolyline = null; 
+let selectedDroneId = null;
 
-/* ---------- mission mode ---------- */
-function startMission() {
-  missionMode = true;
-  missionPoints = [];
-  if (missionLine) {
-    map.removeLayer(missionLine);
-    missionLine = null;
-  }
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-  document.getElementById("mission-info").textContent = "Tryb misji aktywny. Kliknij na mapę, aby dodać punkty.";
-  map.on("click", addMissionPoint);
+// Ikony
+const getDroneIconHtml = (color, isSelected = false) => `
+    <div class="drone-body" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; transition: transform 0.1s linear;">
+        <svg viewBox="0 0 24 24" fill="${color}" stroke="rgba(0,0,0,0.6)" stroke-width="1" style="width: 100%; height: 100%; filter: drop-shadow(0 0 ${isSelected ? '6px' : '2px'} ${color}) drop-shadow(0 2px 4px rgba(0,0,0,0.7));">
+            <path d="M12 2L4.5 20.29C4.24 20.89 4.75 21.54 5.4 21.37L12 19.5L18.6 21.37C19.25 21.54 19.76 20.89 19.5 20.29L12 2Z" />
+        </svg>
+    </div>`;
+
+function createDroneIcon(color = '#00ff6a') {
+    return L.divIcon({ className: 'custom-drone-wrapper', html: getDroneIconHtml(color), iconSize: [32, 32], iconAnchor: [16, 16] });
+}
+function createWaypointIcon(number) {
+    return L.divIcon({
+        className: 'waypoint-marker',
+        html: `<div style="background: rgba(0,170,255,0.15); color: #00aaff; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #00aaff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-family: 'Share Tech Mono', monospace; font-weight: bold; box-shadow: 0 0 8px rgba(0,170,255,0.4);">${number}</div>`,
+        iconSize: [22, 22], iconAnchor: [11, 11]
+    });
+}
+const editNodeIcon = L.divIcon({ className: 'edit-node', html: '<div style="background:#ffb800; width:10px; height:10px; border-radius:50%; border:1px solid rgba(0,0,0,0.5); box-shadow:0 0 6px rgba(255,184,0,0.6);"></div>', iconSize: [10, 10], iconAnchor: [5, 5] });
+
+// Inicjalizacja
+document.addEventListener("DOMContentLoaded", () => {
+    map = L.map('map').setView([52.2297, 21.0122], 15);
+    L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '© Stadia Maps © OSM' }).addTo(map);
+    missionLayer.addTo(map);
+    drawingLayer.addTo(map);
+
+    document.getElementById('mission-btn').addEventListener('click', handleMainButton);
+    document.getElementById('generate-path-btn').addEventListener('click', generatePath);
+    document.getElementById('clear-mission-btn').addEventListener('click', clearMission);
+    document.getElementById('mission-type-select').addEventListener('change', (e) => {
+        updateDrawingVisuals(); toggleDensityControl(e.target.value);
+    });
+    document.getElementById('panel-close-btn').addEventListener('click', () => {
+        closeDronePanel();
+    });
+    map.on('click', onMapClick);
+
+    socket.on('telemetry_update', (drones) => {
+        updateMap(drones);
+        updateSidebar(drones);
+        if (selectedDroneId) {
+            const d = drones.find(x => x.drone_id === selectedDroneId);
+            if(d) {
+                updateHUD(d.roll, d.pitch, d.yaw);
+                updateDronePanel(d);
+            }
+        }
+    });
+});
+
+// UI
+function toggleDensityControl(type) {
+    document.getElementById('density-control').style.display = (type === 'lawnmower') ? 'block' : 'none';
 }
 
+function handleMainButton() {
+    if (finalWaypoints.length > 0 && !isDrawingMode) uploadMission();
+    else if (isDrawingMode) toggleDrawingMode(false); 
+    else toggleDrawingMode(true); 
+}
 
-function addMissionPoint(e) {
-  if (!missionMode) return;
-
-  const latlng = e.latlng;
-  missionPoints.push(latlng);
-
-  const marker = L.marker(latlng, {
-    draggable: true,
-    icon: L.divIcon({
-      className: 'mission-marker',
-      html: `<div style="width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #000;"></div>`,
-      iconSize: [12, 12],
-      iconAnchor: [6, 6]
-    })
-  }).addTo(map);
-
-  // Obsługa przeciągania
-  marker.on("drag", function (ev) {
-    const idx = missionMarkers.indexOf(marker);
-    if (idx !== -1) {
-      missionPoints[idx] = ev.target.getLatLng();
-      updateMissionPolygon();
+function toggleDrawingMode(enable) {
+    const btn = document.getElementById('mission-btn');
+    isDrawingMode = enable;
+    if (enable) {
+        drawingMarkers = []; drawingLayer.clearLayers(); missionLayer.clearLayers(); finalWaypoints = []; 
+        btn.innerText = "ANULUJ"; btn.style.background = "rgba(255,184,0,0.15)"; btn.style.borderColor = "#ffb800"; btn.style.color = "#ffb800";
+        document.getElementById('mission-info').innerText = "TRYB RYSOWANIA..."; document.getElementById('clear-mission-btn').disabled = false;
+        toggleDensityControl(document.getElementById('mission-type-select').value);
+    } else {
+        btn.innerText = "NOWA MISJA"; btn.style.background = "rgba(0,255,106,0.1)"; btn.style.borderColor = "#00c44f"; btn.style.color = "#00ff6a";
+        drawingLayer.clearLayers(); document.getElementById('mission-info').innerText = "GOTOWE.";
     }
-  });
+}
 
-  // Obsługa prawego kliknięcia (usuń punkt)
-  marker.on("contextmenu", function () {
-    const idx = missionMarkers.indexOf(marker);
-    if (idx !== -1) {
-      map.removeLayer(marker);
-      missionMarkers.splice(idx, 1);
-      missionPoints.splice(idx, 1);
-      updateMissionPolygon();
+function onMapClick(e) {
+    if (!isDrawingMode) return;
+    const marker = L.marker(e.latlng, { draggable: true, icon: editNodeIcon }).addTo(drawingLayer);
+    drawingMarkers.push(marker);
+    marker.on('drag', updateDrawingVisuals);
+    updateDrawingVisuals();
+}
+
+function updateDrawingVisuals() {
+    if (drawingMarkers.length === 0) return;
+    const latlngs = drawingMarkers.map(m => m.getLatLng());
+    if (drawingPolyline) drawingLayer.removeLayer(drawingPolyline);
+    const type = document.getElementById('mission-type-select').value;
+    if (type === 'lawnmower' && latlngs.length > 2) drawingPolyline = L.polygon(latlngs, { color: '#ffb800', dashArray: '5, 8', fillOpacity: 0.1, weight: 1.5 }).addTo(drawingLayer);
+    else drawingPolyline = L.polyline(latlngs, { color: '#ffb800', dashArray: '5, 8', weight: 1.5 }).addTo(drawingLayer);
+}
+
+function generatePath() {
+    if (drawingMarkers.length < 2) { alert("Min. 2 punkty!"); return; }
+    const points = drawingMarkers.map(m => [m.getLatLng().lat, m.getLatLng().lng]);
+    const type = document.getElementById('mission-type-select').value;
+    finalWaypoints = [];
+
+    if (type === 'waypoints') finalWaypoints = points;
+    else if (type === 'lawnmower') {
+        if (points.length < 3) { alert("Min. 3 punkty!"); return; }
+        const turfPoints = [...points, points[0]].map(p => [p[1], p[0]]); 
+        const searchArea = turf.polygon([turfPoints]);
+        const bbox = turf.bbox(searchArea);
+        let dist = parseFloat(document.getElementById('scan-distance').value);
+        if (isNaN(dist) || dist < 5) { dist = 5; document.getElementById('scan-distance').value = 5; }
+        const step = dist / 111132; 
+        let latIter = bbox[1]; let toggle = false;
+        if (step <= 0.00001) return;
+
+        while (latIter <= bbox[3]) {
+            let rowPoints = [];
+            for(let ln = bbox[0]; ln <= bbox[2]; ln += step/5) {
+                if (turf.booleanPointInPolygon(turf.point([ln, latIter]), searchArea)) rowPoints.push([latIter, ln]);
+            }
+            if (rowPoints.length > 1) {
+                let segment = [rowPoints[0], rowPoints[rowPoints.length - 1]];
+                if (toggle) segment.reverse();
+                finalWaypoints.push(...segment);
+                toggle = !toggle;
+            } else if (rowPoints.length === 1) finalWaypoints.push(rowPoints[0]);
+            latIter += step;
+        }
+        if (finalWaypoints.length === 0) finalWaypoints = points;
     }
-  });
-
-  missionMarkers.push(marker);
-  updateMissionPolygon();
-
-  // Podczas dodawania punktów – wyłącz przycisk usuwania
-  document.getElementById("clear-mission-btn").disabled = true;
+    renderEditableMission();
+    isDrawingMode = false; drawingLayer.clearLayers(); 
+    const btn = document.getElementById('mission-btn');
+    btn.innerText = "WGRAJ MISJĘ"; btn.style.background = "rgba(0,170,255,0.1)"; btn.style.borderColor = "#00aaff"; btn.style.color = "#00aaff";
+    document.getElementById('mission-info').innerText = `TRASA: ${finalWaypoints.length} PKT.`;
 }
 
-function finishMission() {
-  if (missionPoints.length < 3) {
-    alert("Musisz dodać co najmniej 3 punkty do misji.");
-    return;
-  }
-
-  missionMode = false;
-  map.off("click", addMissionPoint);
-
-  updateMissionPolygon();
-
-  document.getElementById("mission-info").textContent = "Obszar zaznaczony.";
-  document.getElementById("clear-mission-btn").disabled = false; // teraz można usunąć
-
-  saveMission();
+function renderEditableMission() {
+    missionLayer.clearLayers(); 
+    missionPolyline = L.polyline(finalWaypoints, { color: '#00aaff', weight: 2, opacity: 0.7, dashArray: '4, 6' }).addTo(missionLayer);
+    finalWaypoints.forEach((coords, index) => {
+        const marker = L.marker(coords, { icon: createWaypointIcon(index + 1), draggable: true }).addTo(missionLayer);
+        marker.bindTooltip(`WP ${index + 1}`, { direction: 'top' });
+        marker.on('drag', (e) => {
+            finalWaypoints[index] = [e.target.getLatLng().lat, e.target.getLatLng().lng];
+            missionPolyline.setLatLngs(finalWaypoints);
+        });
+        marker.on('dragend', () => {
+            const btn = document.getElementById('mission-btn');
+            btn.innerText = "AKTUALIZUJ MISJĘ"; btn.style.background = "rgba(255,184,0,0.1)"; btn.style.borderColor = "#ffb800"; btn.style.color = "#ffb800";
+        });
+    });
 }
 
-
-function updateMissionPolygon() {
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-
-  if (missionPoints.length >= 3) {
-    missionPolygon = L.polygon([...missionPoints, missionPoints[0]], {
-      color: "#1322E6",
-      weight: 3,
-      fillColor: "#1322E6",
-      fillOpacity: 0.15
-    }).addTo(map);
-
-    const coordList = missionPoints.map(p => `• ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`).join("\n");
-    document.getElementById("mission-info").innerText = "Misja:\n" + coordList;
-  } else {
-    document.getElementById("mission-info").innerText = "Dodaj co najmniej 3 punkty do misji.";
-  }
+async function uploadMission() {
+    if (!selectedDroneId) { alert("Wybierz drona!"); return; }
+    // GENEROWANIE NOWEGO ID (Kluczowe dla aktualizacji w locie)
+    const newMissionId = "m_" + Date.now();
+    const payload = { drones: { [selectedDroneId]: { mission_id: newMissionId, waypoints: finalWaypoints, role: document.getElementById('mission-type-select').value } } };
+    try {
+        const res = await fetch('/api/mission/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (res.status === 401) location.reload(); 
+        else {
+             const btn = document.getElementById('mission-btn');
+             btn.innerText = "WYSŁANO ✓"; btn.style.background = "rgba(0,255,106,0.15)"; btn.style.borderColor = "#00ff6a"; btn.style.color = "#00ff6a";
+             setTimeout(() => { btn.innerText = "AKTUALIZUJ W LOCIE"; btn.style.background = "rgba(0,170,255,0.1)"; btn.style.borderColor = "#00aaff"; btn.style.color = "#00aaff"; }, 2000);
+        }
+    } catch (e) { alert("Błąd: " + e); }
 }
 
-
-document.getElementById("clear-mission-btn").onclick = () => {
-  if (confirm("Czy na pewno chcesz usunąć całą misję?")) {
-    clearMission();
-  }
-};
-
-function clearMission() {
-  missionPoints = [];
-  missionMarkers.forEach(m => map.removeLayer(m));
-  missionMarkers = [];
-  if (missionPolygon) {
-    map.removeLayer(missionPolygon);
-    missionPolygon = null;
-  }
-
-    // 🧽 Usuń trasy lotów
-    if (window.flightLines) {
-      window.flightLines.forEach(l => map.removeLayer(l));
-      window.flightLines = [];
+async function clearMission() {
+    toggleDrawingMode(false); missionLayer.clearLayers(); finalWaypoints = [];
+    if (selectedDroneId && confirm(`STOP dla ${selectedDroneId}?`)) {
+        await fetch('/api/mission/stop', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ drones: [selectedDroneId] }) });
     }
-
-  localStorage.removeItem(MISSION_KEY);
-  missionMode = false;
-  document.getElementById("mission-info").textContent = "Misja usunięta.";
-  document.getElementById("clear-mission-btn").disabled = true;
 }
 
+// === AKTUALIZACJA UI ===
+function updateSidebar(drones) {
+    const containers = {
+        active: document.getElementById('active-list'),
+        inactive: document.getElementById('inactive-list'),
+        detected: document.getElementById('detected-list')
+    };
 
-function saveMission() {
-  try {
-    const coords = missionPoints.map(p => [p.lat, p.lng]);
-    localStorage.setItem(MISSION_KEY, JSON.stringify(coords));
-  } catch (e) {
-    console.warn("Nie udało się zapisać misji", e);
-  }
-}
-
-function loadMission() {
-  try {
-    const data = JSON.parse(localStorage.getItem(MISSION_KEY));
-    if (!Array.isArray(data) || data.length < 3) return;
-
-    missionPoints = data.map(pair => L.latLng(pair[0], pair[1]));
-
-    // Dodaj markery
-    missionMarkers = missionPoints.map((latlng, idx) => {
-      const marker = L.marker(latlng, {
-        draggable: true,
-        icon: L.divIcon({
-          className: 'mission-marker',
-          html: `<div style="width: 12px; height: 12px; background: #555; border-radius: 50%; border: 2px solid #000;"></div>`,
-          iconSize: [12, 12],
-          iconAnchor: [6, 6]
-        })
-      }).addTo(map);
-
-      marker.on("drag", function (ev) {
-        missionPoints[idx] = ev.target.getLatLng();
-        updateMissionPolygon();
-        saveMission(); // zapisuj po każdym drag
-      });
-
-      marker.on("contextmenu", function () {
-        map.removeLayer(marker);
-        missionMarkers.splice(idx, 1);
-        missionPoints.splice(idx, 1);
-        updateMissionPolygon();
-        saveMission();
-      });
-
-      return marker;
+    const incomingIds = new Set(drones.map(d => d.drone_id));
+    
+    document.querySelectorAll('.item').forEach(el => {
+        const id = el.id.replace('item-', '');
+        if (!incomingIds.has(id)) {
+            el.remove();
+        }
     });
 
-    updateMissionPolygon();
-    document.getElementById("clear-mission-btn").disabled = false;
-    document.getElementById("mission-info").textContent = "Misja przywrócona.";
-  } catch (e) {
-    console.warn("Nie udało się załadować misji", e);
-  }
+    drones.forEach(d => {
+        const listType = d.is_tracked ? (d.online ? 'active' : 'inactive') : 'detected';
+        const targetContainer = containers[listType];
+        let el = document.getElementById(`item-${d.drone_id}`);
+
+        if (el && el.parentElement !== targetContainer) {
+            targetContainer.appendChild(el); 
+        }
+
+        if (!el) {
+            el = document.createElement('div');
+            el.id = `item-${d.drone_id}`;
+            el.onclick = () => selectDrone(d.drone_id);
+            targetContainer.appendChild(el);
+            
+            el.innerHTML = `
+                <div class="item-content">
+                    <div style="flex-grow: 1;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="d-id"></span>
+                            <span class="stat-dot"></span>
+                        </div>
+                        <div class="d-meta">
+                            <div>MSN <span class="d-mission">—</span></div>
+                            <div>ROLA <span class="d-role">—</span></div>
+                            <div>BAT <span class="d-bat">—</span></div>
+                        </div>
+                    </div>
+                    <button class="list-btn action-btn"></button>
+                </div>
+            `;
+            
+            const btn = el.querySelector('.action-btn');
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const isTracked = el.dataset.tracked === "true";
+                if (isTracked) deleteDrone(d.drone_id);
+                else addDrone(d.drone_id);
+            };
+        }
+
+        el.dataset.tracked = d.is_tracked;
+        el.className = `item ${listType} ${d.drone_id===selectedDroneId?'selected':''}`;
+
+        el.querySelector('.d-id').innerText = d.drone_id;
+        
+        const dot = el.querySelector('.stat-dot');
+        dot.style.backgroundColor = d.online ? '#00ff6a' : '#ff3c3c';
+
+        el.querySelector('.d-mission').innerText = d.mission_display || "brak";
+        el.querySelector('.d-role').innerText = d.server_assigned_role || "brak";
+        
+        const batSpan = el.querySelector('.d-bat');
+        batSpan.innerText = `${d.battery}%`;
+        batSpan.style.color = d.battery < 20 ? '#ff3c3c' : d.battery < 40 ? '#ffb800' : '#00ff6a';
+
+        const btn = el.querySelector('.action-btn');
+        if (d.is_tracked) {
+            btn.innerText = "🗑️";
+            btn.title = "Przenieś do wykrytych";
+            btn.className = "list-btn btn-delete action-btn";
+        } else {
+            btn.innerText = "➕";
+            btn.title = "Dodaj drona";
+            btn.className = "list-btn btn-add action-btn";
+        }
+    });
+
+    handleEmptyMessage(containers.active);
+    handleEmptyMessage(containers.inactive);
+    handleEmptyMessage(containers.detected);
 }
 
-/* ---------- generowanie tras ---------- */
+function handleEmptyMessage(container) {
+    const itemsCount = container.querySelectorAll('.item').length;
+    let msg = container.querySelector('.empty-msg');
 
-function generateFlightPathsForDrones(numDrones = 3, stepMeters = 50, algorithm = "1", algorithmName = "Lawnmower") {
-  if (!missionPolygon) {
-    alert("Najpierw zaznacz obszar misji.");
-    return;
-  }
+    if (itemsCount === 0) {
+        if (!msg) {
+            msg = document.createElement('div');
+            msg.className = 'empty-msg';
+            msg.innerHTML = '<em>Brak</em>';
+            msg.style.padding = '10px';
+            msg.style.color = '#888';
+            container.appendChild(msg);
+        }
+    } else {
+        if (msg) msg.remove();
+    }
+}
 
-  // Używamy zaakceptowanych dronów (nie filtrujemy po ostatnim widzeniu)
-  const activeDrones = [...accepted];
-  activeDrones.sort();
+async function addDrone(id) {
+    try {
+        await fetch('/api/drone/add', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ drone_id: id })
+        });
+    } catch(e) { console.error(e); }
+}
 
-  if (activeDrones.length < numDrones) {
-    alert(`Liczba dostępnych (zaakceptowanych) dronów (${activeDrones.length}) jest mniejsza niż wymagana (${numDrones}). Nie wysyłam tras.`);
-    return;
-  }
+async function deleteDrone(id) {
+    if(!confirm(`Przenieść drona ${id} do wykrytych?`)) return;
+    try {
+        const res = await fetch('/api/drone/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ drone_id: id })
+        });
+        
+        if (res.status === 200 && selectedDroneId === id) {
+            selectedDroneId = null;
+            document.getElementById('gauges-container').classList.add('hidden');
+            document.getElementById('drone-panel').classList.add('hidden');
+            missionLayer.clearLayers();
+            finalWaypoints = [];
+        }
+    } catch (e) { console.error(e); }
+}
 
-  // 🧽 Usuń stare trasy
-  if (window.flightLines) {
-    window.flightLines.forEach(l => map.removeLayer(l));
-  }
-  window.flightLines = [];
-
-  const coords = missionPolygon.getLatLngs()[0].map(p => [p.lng, p.lat]);
-  const polygon = turf.polygon([[...coords, coords[0]]]); // zamknięty ring
-  const bbox = turf.bbox(polygon);
-  const stepDeg = stepMeters / 111320;
-
-  const centerY = (bbox[1] + bbox[3]) / 2;
-  const width = bbox[2] - bbox[0];
-
-  let y = bbox[1] + stepDeg / 2;
-  const linesInside = [];
-  let toggle = false;
-
-  while (y <= bbox[3]) {
-    const fullLine = turf.lineString([[bbox[0] - width, y], [bbox[2] + width, y]]);
-    const clipped = turf.lineIntersect(fullLine, polygon);
-
-    if (clipped.features.length >= 2) {
-      const pts = clipped.features.map(f => f.geometry.coordinates);
-      pts.sort((a, b) => a[0] - b[0]); // sortuj po długości geograficznej
-
-      const inside = toggle ? [pts[1], pts[0]] : [pts[0], pts[1]];
-      linesInside.push(inside);
-      toggle = !toggle;
+function updateMap(drones) {
+    const currentIds = drones.map(d => d.drone_id);
+    for (let id in droneMarkers) {
+        if (!currentIds.includes(id)) {
+            map.removeLayer(droneMarkers[id]);
+            delete droneMarkers[id];
+        }
     }
 
-    y += stepDeg;
-  }
+    drones.forEach(d => {
+        if (droneMarkers[d.drone_id]) {
+            const marker = droneMarkers[d.drone_id];
+            marker.setLatLng([d.lat, d.lon]);
+            const iconElement = marker.getElement();
+            if (iconElement) {
+                const body = iconElement.querySelector('.drone-body');
+                if (body) body.style.transform = `rotate(${d.yaw}deg)`;
+            }
+            marker.setOpacity(d.is_tracked ? 1.0 : 0.6);
+            if (marker.isPopupOpen()) {
+                 marker.setPopupContent(`
+                    <b>${d.drone_id}</b><br>
+                    Misja: ${d.mission_display || '-'}<br>
+                    Rola: ${d.server_assigned_role || '-'}<br>
+                    Bat: ${d.battery}%
+                 `);
+            }
+        } else {
+            const m = L.marker([d.lat, d.lon], { icon: createDroneIcon(d.is_tracked ? '#00ff6a' : '#4a6655') }).addTo(map);
+            m.on('click', () => selectDrone(d.drone_id)); 
+            m.bindPopup(`<b>${d.drone_id}</b>`);
+            m.setOpacity(d.is_tracked ? 1.0 : 0.5);
+            droneMarkers[d.drone_id] = m;
+        }
+    });
+}
 
-  if (linesInside.length < 1) {
-    alert("Nie udało się wygenerować trasy – upewnij się, że obszar nie jest zbyt mały.");
-    return;
-  }
+function selectDrone(id) {
+    selectedDroneId = id; 
+    document.getElementById('gauges-container').classList.remove('hidden');
+    document.getElementById('drone-panel').classList.remove('hidden');
+    document.getElementById('panel-drone-id').innerText = id;
 
-  // 🔁 Zawrotki: dodajemy tam i z powrotem
-  const flightPath = [];
-  for (let i = 0; i < linesInside.length; i++) {
-    flightPath.push(linesInside[i][0]);
-    flightPath.push(linesInside[i][1]);
-  }
+    if (droneMarkers[id]) {
+        map.flyTo(droneMarkers[id].getLatLng(), 18, {
+            animate: true,
+            duration: 1.5 
+        });
+    }
+}
 
-  // 🔀 Rozdziel ścieżkę między drony
-  const totalPoints = flightPath.length;
-  const pointsPerDrone = Math.ceil(totalPoints / numDrones);
-  const colors = ["red", "green", "blue", "orange", "purple", "brown"];
+function closeDronePanel() {
+    document.getElementById('drone-panel').classList.add('hidden');
+    document.getElementById('gauges-container').classList.add('hidden');
+    selectedDroneId = null;
+}
 
-  // Przechowujemy ścieżki dla każdego drona
-  const allDronePaths = {};
+function updateDronePanel(d) {
+    // Battery
+    const bat = d.battery ?? null;
+    if (bat !== null) {
+        document.getElementById('sv-battery').innerText = bat;
+        const batCard = document.getElementById('sensor-battery');
+        if (bat < 20) {
+            batCard.className = 'sensor-card warning';
+            batCard.querySelector('.sensor-badge').className = 'sensor-badge badge-warn';
+            batCard.querySelector('.sensor-badge').innerText = 'LOW';
+        } else {
+            batCard.className = 'sensor-card available';
+            batCard.querySelector('.sensor-badge').className = 'sensor-badge badge-ok';
+            batCard.querySelector('.sensor-badge').innerText = 'OK';
+        }
+    }
 
-  for (let d = 0; d < numDrones; d++) {
-    const startIdx = d * pointsPerDrone;
-    const endIdx = Math.min(startIdx + pointsPerDrone, totalPoints);
-    const path = flightPath.slice(startIdx, endIdx);
+    // Altitude
+    const alt = d.alt ?? null;
+    if (alt !== null) document.getElementById('sv-alt').innerText = Math.round(alt);
 
-    if (path.length < 2) continue;
+    // Heading
+    const yaw = d.yaw ?? null;
+    if (yaw !== null) document.getElementById('sv-hdg').innerText = Math.round(yaw);
 
-    // Narysuj ścieżkę na mapie
-    const polyline = L.polyline(path.map(c => [c[1], c[0]]), {
-      color: colors[d % colors.length],
-      weight: 2
-    }).addTo(map);
+    // Mission
+    const missionVal = d.mission_display || '—';
+    const roleVal = d.server_assigned_role || '—';
+    document.getElementById('sv-mission').innerText = missionVal;
+    document.getElementById('sv-role').innerText = roleVal.toUpperCase();
+    const missionCard = document.getElementById('sensor-mission');
+    const missionBadge = document.getElementById('sb-mission');
+    if (missionVal !== '—' && missionVal !== 'brak') {
+        missionCard.className = 'sensor-card available';
+        missionBadge.className = 'sensor-badge badge-ok';
+        missionBadge.innerText = 'ACT';
+    } else {
+        missionCard.className = 'sensor-card unavailable';
+        missionBadge.className = 'sensor-badge badge-na';
+        missionBadge.innerText = '—';
+    }
 
-    window.flightLines.push(polyline);
+    // Camera -- MJPEG stream z cam_url
+    const hasCamera = d.has_camera || false;
+    const camUrl    = d.cam_url || null;
+    const statusLabel = document.getElementById('cam-status-label');
+    const dot         = document.querySelector('.cam-status-dot');
+    const placeholder = document.getElementById('cam-placeholder');
+    const video       = document.getElementById('cam-video');
 
-    // Przypisz trasę do aktywnego drona
-    const droneId = activeDrones[d];
-    allDronePaths[droneId] = path;
-  }
+    let camImg = document.getElementById('cam-img');
 
-  const totalKm = turf.length(turf.lineString(flightPath), { units: 'kilometers' }).toFixed(2);
-  const infoText = `📍 Algorytm: ${algorithmName}\n🛸 Drony (${numDrones}): ${activeDrones.slice(0, numDrones).join(", ")}\n📏 Krok: ${stepMeters}m\n📊 Długość: ${totalKm} km`;
-  document.getElementById("mission-info").textContent = infoText;
+    if (hasCamera && camUrl) {
+        statusLabel.innerText = 'LIVE';
+        dot.style.background  = '#00ff6a';
+        dot.style.boxShadow   = '0 0 6px #00ff6a';
+        placeholder.style.display = 'none';
+        video.style.display       = 'none';
 
-  // Wysyłamy tylko, jeśli mamy trasy do wysłania
-  if (Object.keys(allDronePaths).length > 0) {
-    fetch("/api/mission/upload", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ drones: allDronePaths })
-    })
-      .then(res => res.json())
-      .then(data => {
-        console.log("✅ Misja wysłana:", data);
-        document.getElementById("mission-info").textContent += "\n✅ Trasy wysłane do dronów!";
-      })
-      .catch(err => {
-        console.error("❌ Błąd podczas wysyłania misji:", err);
-        document.getElementById("mission-info").textContent += "\n❌ Błąd wysyłania tras!";
-      });
-  }
+        if (!camImg) {
+            camImg = document.createElement('img');
+            camImg.id    = 'cam-img';
+            camImg.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;position:absolute;top:0;left:0;';
+            const overlay = document.querySelector('.camera-overlay');
+            document.getElementById('camera-feed').insertBefore(camImg, overlay);
+        }
+        if (camImg.dataset.droneId !== d.drone_id) {
+            camImg.src             = camUrl;
+            camImg.dataset.droneId = d.drone_id;
+            camImg.style.display   = 'block';
+            camImg.onerror = () => {
+                statusLabel.innerText     = 'NO SIGNAL';
+                dot.style.background      = '#ff3c3c';
+                dot.style.boxShadow       = '';
+                placeholder.style.display = '';
+                camImg.style.display      = 'none';
+            };
+        }
+    } else {
+        statusLabel.innerText     = 'NO SIGNAL';
+        dot.style.background      = '#ff3c3c';
+        dot.style.boxShadow       = '';
+        placeholder.style.display = '';
+        if (camImg) camImg.style.display = 'none';
+    }
+}
+
+function updateHUD(roll, pitch, yaw) {
+    const h = document.getElementById('horizon-gradient');
+    const pf = 2.5; 
+    let cp = Math.max(-60, Math.min(60, pitch));
+    h.style.transform = `rotate(${-roll}deg) translateY(${cp * pf}px)`;
+    document.getElementById('hud-roll-pitch').innerText = `R:${Math.round(roll)} P:${Math.round(pitch)}`;
+    const n = document.getElementById('compass-needle-el');
+    n.style.transform = `translateX(-50%) rotate(${-yaw}deg)`;
+    document.getElementById('hud-yaw').innerText = `HDG:${Math.round(yaw)}`;
 }
